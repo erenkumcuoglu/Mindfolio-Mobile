@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "mindfolio-mobile",
+    "slug": "mindfolio-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Mindfolio sesini kaydedip içeriğe dönüştürmek için mikrofona erişir."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "permissions": ["RECORD_AUDIO"],
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      ["expo-av", { "microphonePermission": "Mindfolio sesini kaydetmek için mikrofona erişir." }]
+    ],
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}

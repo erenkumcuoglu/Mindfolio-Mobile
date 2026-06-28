@@ -1,0 +1,315 @@
+import { useEffect, useState } from "react";
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  ScrollView,
+  ActivityIndicator,
+  Modal,
+  TextInput,
+  Alert,
+  StyleSheet,
+} from "react-native";
+import { useTheme } from "../theme/ThemeContext";
+import { radii, spacing, type Palette } from "../theme/tokens";
+import { EmptyState } from "../components/EmptyState";
+import { DocIcon } from "../components/icons";
+import {
+  listContent,
+  saveContent,
+  updateContent,
+  deleteContent,
+  getPersona,
+  formatShortDate,
+  type ContentRow,
+} from "../lib/data";
+import { confirmAsync, alertMsg } from "../lib/confirm";
+import { t } from "../lib/i18n";
+
+const tagColors = (k: string, c: Palette) => {
+  const s = (k ?? "").toLowerCase();
+  if (s.includes("linkedin")) return { bg: "rgba(56,189,248,0.12)", fg: "#0284c7" };
+  if (s === "x" || s.includes("twitter")) return { bg: c.glassFillStrong, fg: c.text2 };
+  return { bg: c.mintBg, fg: c.accent };
+};
+
+export default function ContentScreen() {
+  const { c } = useTheme();
+  const styles = makeStyles(c);
+  const [rows, setRows] = useState<ContentRow[] | null>(null);
+  const [error, setError] = useState(false);
+  const [pillars, setPillars] = useState<string[]>([]);
+  const [chip, setChip] = useState("Tümü");
+  const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<ContentRow | null>(null);
+
+  const load = () => {
+    setRows(null);
+    listContent().then(setRows).catch(() => setError(true));
+  };
+  useEffect(() => {
+    load();
+    getPersona().then((p) => setPillars((p?.profile?.pillars ?? []).map((x) => x.title).filter(Boolean)));
+  }, []);
+
+  const chips = ["Tümü", ...pillars];
+  const items = (rows ?? []).filter((r) => chip === "Tümü" || r.category === chip);
+
+  return (
+    <View style={styles.root}>
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <View style={styles.pgHdr}>
+          <Text style={styles.pgTitle}>{t.contentTitle}</Text>
+          <Text style={styles.pgDesc}>{t.contentDesc}</Text>
+        </View>
+
+        {rows === null && !error && <View style={styles.loading}><ActivityIndicator color={c.accent} /></View>}
+        {error && <Text style={styles.error}>İçerikler yüklenemedi.</Text>}
+
+        {rows !== null && rows.length === 0 && (
+          <EmptyState
+            icon={<DocIcon color={c.accent} />}
+            title="Henüz içerik yok"
+            motiv="Yeni içerik ekle ya da Stüdyo'dan kayıt yap."
+            ctaLabel="İçerik Ekle →"
+            onCta={() => setAdding(true)}
+          />
+        )}
+
+        {rows !== null && rows.length > 0 && (
+          <>
+            {chips.length > 1 && (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+                {chips.map((ch) => (
+                  <TouchableOpacity key={ch} style={[styles.chip, chip === ch && styles.chipActive]} activeOpacity={0.8} onPress={() => setChip(ch)}>
+                    <Text style={[styles.chipText, chip === ch && styles.chipTextActive]}>{ch}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
+
+            <View style={styles.list}>
+              {items.map((it) => {
+                const tag = tagColors(it.category ?? "", c);
+                return (
+                  <TouchableOpacity key={it.id} style={styles.card} activeOpacity={0.85} onPress={() => setEditing(it)}>
+                    <View style={styles.cardTop}>
+                      {it.category ? (
+                        <View style={[styles.tag, { backgroundColor: tag.bg }]}><Text style={[styles.tagText, { color: tag.fg }]}>{it.category}</Text></View>
+                      ) : <View />}
+                      <Text style={styles.cardDate}>{it.scheduled_at ? `📅 ${formatShortDate(it.scheduled_at)}` : formatShortDate(it.created_at)}</Text>
+                    </View>
+                    <Text style={styles.cardTitle}>{it.title}</Text>
+                    {it.body ? (
+                      <View style={styles.statusRow}><View style={styles.greenDot} /><Text style={styles.statusGreen}>Taslak hazır</Text></View>
+                    ) : <Text style={styles.statusDim}>Taslak yok</Text>}
+                  </TouchableOpacity>
+                );
+              })}
+              {items.length === 0 && <Text style={styles.noFilter}>"{chip}" pillar'ında içerik yok.</Text>}
+            </View>
+          </>
+        )}
+      </ScrollView>
+
+      <TouchableOpacity style={styles.fab} activeOpacity={0.85} onPress={() => setAdding(true)}>
+        <Text style={styles.fabPlus}>＋</Text>
+      </TouchableOpacity>
+
+      <ContentEditor
+        mode="add"
+        visible={adding}
+        pillars={pillars}
+        onClose={() => setAdding(false)}
+        onSaved={() => { setAdding(false); load(); }}
+      />
+      <ContentEditor
+        mode="edit"
+        visible={!!editing}
+        item={editing}
+        pillars={pillars}
+        onClose={() => setEditing(null)}
+        onSaved={() => { setEditing(null); load(); }}
+      />
+    </View>
+  );
+}
+
+function ContentEditor({ mode, visible, item, pillars, onClose, onSaved }: {
+  mode: "add" | "edit";
+  visible: boolean;
+  item?: ContentRow | null;
+  pillars: string[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { c } = useTheme();
+  const styles = makeStyles(c);
+  const [title, setTitle] = useState("");
+  const [pillar, setPillar] = useState<string | null>(null);
+  const [body, setBody] = useState("");
+  const [scheduled, setScheduled] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (visible) {
+      setTitle(item?.title ?? "");
+      setPillar(item?.category ?? null);
+      setBody(item?.body ?? "");
+      setScheduled(item?.scheduled_at ?? null);
+    }
+  }, [visible, item]);
+
+  const quickDate = (days: number | null) => {
+    if (days === null) { setScheduled(null); return; }
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    d.setHours(9, 0, 0, 0);
+    setScheduled(d.toISOString());
+  };
+
+  const save = async () => {
+    if (!title.trim()) return;
+    setSaving(true);
+    try {
+      if (mode === "edit" && item) {
+        await updateContent(item.id, { title: title.trim(), category: pillar, body: body || null, scheduled_at: scheduled });
+      } else {
+        await saveContent({ title: title.trim(), body, category: pillar ?? undefined, scheduled_at: scheduled });
+      }
+      onSaved();
+    } catch (e: any) {
+      alertMsg("Kaydetme", e?.message ?? "Kaydedilemedi");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!item) return;
+    const ok = await confirmAsync("İçeriği sil?", item.title, { confirmLabel: "Sil" });
+    if (!ok) return;
+    try { await deleteContent(item.id); onSaved(); } catch { alertMsg("Silme", "İçerik silinemedi."); }
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.sheet}>
+          <View style={styles.sheetHandle} />
+          <Text style={styles.sheetTitle}>{mode === "add" ? "Yeni İçerik" : "İçeriği Düzenle"}</Text>
+
+          <Text style={styles.fieldLb}>Başlık</Text>
+          <TextInput style={styles.input} placeholder="İçerik başlığı" placeholderTextColor={c.text4} value={title} onChangeText={setTitle} />
+
+          <Text style={styles.fieldLb}>Pillar</Text>
+          {pillars.length > 0 ? (
+            <View style={styles.pillarRow}>
+              {pillars.map((p) => {
+                const on = pillar === p;
+                return (
+                  <TouchableOpacity key={p} style={[styles.pillarChip, on && styles.pillarChipOn]} onPress={() => setPillar(on ? null : p)}>
+                    <Text style={[styles.pillarChipText, on && styles.pillarChipTextOn]}>{p}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          ) : (
+            <Text style={styles.hint}>Pillar'ların onboarding'de oluşur.</Text>
+          )}
+
+          {mode === "edit" && (
+            <>
+              <Text style={styles.fieldLb}>İçerik</Text>
+              <TextInput style={[styles.input, styles.bodyInput]} placeholder="Taslak metni…" placeholderTextColor={c.text4} value={body} onChangeText={setBody} multiline />
+            </>
+          )}
+
+          <Text style={styles.fieldLb}>Planla</Text>
+          <View style={styles.dateRow}>
+            {[{ l: "Yok", d: null }, { l: "Bugün", d: 0 }, { l: "Yarın", d: 1 }, { l: "+1 Hafta", d: 7 }].map((o) => {
+              const on = (o.d === null && !scheduled) || (o.d !== null && scheduled && Math.round((new Date(scheduled).getTime() - Date.now()) / 86400000) === o.d);
+              return (
+                <TouchableOpacity key={o.l} style={[styles.dateChip, on && styles.pillarChipOn]} onPress={() => quickDate(o.d)}>
+                  <Text style={[styles.pillarChipText, on && styles.pillarChipTextOn]}>{o.l}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          {scheduled && <Text style={styles.hint}>📅 {formatShortDate(scheduled)} için planlandı</Text>}
+
+          <View style={styles.sheetActions}>
+            {mode === "edit" ? (
+              <TouchableOpacity style={styles.delBtn} onPress={remove}><Text style={styles.delText}>Sil</Text></TouchableOpacity>
+            ) : (
+              <TouchableOpacity style={styles.cancelBtn} onPress={onClose}><Text style={styles.cancelText}>Vazgeç</Text></TouchableOpacity>
+            )}
+            <TouchableOpacity style={[styles.saveBtn, saving && { opacity: 0.5 }]} onPress={save} disabled={saving}>
+              <Text style={styles.saveText}>{saving ? "Kaydediliyor…" : "Kaydet"}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function makeStyles(c: Palette) {
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: c.page },
+    content: { paddingHorizontal: spacing.md, paddingTop: 60, paddingBottom: 130 },
+
+    pgHdr: { marginBottom: 16 },
+    pgTitle: { fontSize: 28, fontWeight: "700", letterSpacing: -1, color: c.text1 },
+    pgDesc: { fontSize: 13, color: c.text3, marginTop: 2 },
+
+    loading: { paddingVertical: 60, alignItems: "center" },
+    error: { paddingVertical: 40, textAlign: "center", color: c.error, fontSize: 14 },
+    noFilter: { textAlign: "center", color: c.text4, fontSize: 13, paddingVertical: 24 },
+
+    chipRow: { flexDirection: "row", gap: 8, paddingVertical: 2, marginBottom: 14 },
+    chip: { paddingHorizontal: 13, paddingVertical: 6, borderRadius: radii.pill, borderWidth: 1, borderColor: c.glassBorder, backgroundColor: c.glassFill },
+    chipActive: { backgroundColor: c.accentGhost, borderColor: c.mintBorder },
+    chipText: { fontSize: 12, color: c.text3 },
+    chipTextActive: { color: c.accent, fontWeight: "600" },
+
+    list: { gap: 10 },
+    card: { padding: 14, borderRadius: radii.card, backgroundColor: c.glassFill, borderWidth: 1, borderColor: c.glassBorder },
+    cardTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+    tag: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: radii.pill },
+    tagText: { fontSize: 11, fontWeight: "600" },
+    cardDate: { fontSize: 11, color: c.text4 },
+    cardTitle: { fontSize: 15, fontWeight: "600", color: c.text1, lineHeight: 21 },
+    statusRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10 },
+    greenDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: c.accent },
+    statusGreen: { fontSize: 12, color: c.accent, fontWeight: "500" },
+    statusDim: { fontSize: 12, color: c.text4, marginTop: 10 },
+
+    fab: { position: "absolute", right: 20, bottom: 96, width: 56, height: 56, borderRadius: 28, backgroundColor: c.accent, alignItems: "center", justifyContent: "center", shadowColor: c.accent, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 14, elevation: 8 },
+    fabPlus: { fontSize: 30, color: "#fff", marginTop: -2 },
+
+    modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
+    sheet: { backgroundColor: c.page, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, paddingBottom: 36 },
+    sheetHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: c.border, alignSelf: "center", marginBottom: 16 },
+    sheetTitle: { fontSize: 20, fontWeight: "700", color: c.text1, marginBottom: 4 },
+    fieldLb: { fontSize: 12, color: c.text3, marginBottom: 6, marginTop: 12 },
+    input: { backgroundColor: c.surface, borderWidth: 1, borderColor: c.border, borderRadius: radii.btn, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: c.text1 },
+    bodyInput: { minHeight: 100, textAlignVertical: "top" },
+    hint: { fontSize: 12, color: c.text4, marginTop: 4 },
+    pillarRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+    pillarChip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: c.glassFill, borderWidth: 1, borderColor: c.glassBorder },
+    pillarChipOn: { backgroundColor: c.accentGhost, borderColor: c.mintBorder },
+    pillarChipText: { fontSize: 12, color: c.text3 },
+    pillarChipTextOn: { color: c.accent, fontWeight: "600" },
+    dateRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+    dateChip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: c.glassFill, borderWidth: 1, borderColor: c.glassBorder },
+
+    sheetActions: { flexDirection: "row", gap: 10, marginTop: 24 },
+    cancelBtn: { flex: 1, paddingVertical: 14, borderRadius: radii.btn, borderWidth: 1, borderColor: c.border, alignItems: "center" },
+    cancelText: { fontSize: 15, fontWeight: "600", color: c.text2 },
+    delBtn: { flex: 1, paddingVertical: 14, borderRadius: radii.btn, borderWidth: 1, borderColor: c.amberBorder, alignItems: "center" },
+    delText: { fontSize: 15, fontWeight: "600", color: c.error },
+    saveBtn: { flex: 1, paddingVertical: 14, borderRadius: radii.btn, backgroundColor: c.accent, alignItems: "center" },
+    saveText: { fontSize: 15, fontWeight: "700", color: "#fff" },
+  });
+}
