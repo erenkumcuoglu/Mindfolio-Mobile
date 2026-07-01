@@ -37,7 +37,7 @@ interface Props {
   onResumeDraft?: () => void;
 }
 
-export default function StudioScreen({ onStartRecording, onUploadAudio, onResumeDraft }: Props) {
+export default function StudioScreen({ onStartRecording: onStartRecordingRaw, onUploadAudio, onResumeDraft }: Props) {
   const { c } = useTheme();
   const t = useT();
   const styles = makeStyles(c);
@@ -48,17 +48,37 @@ export default function StudioScreen({ onStartRecording, onUploadAudio, onResume
   const [writeOpen, setWriteOpen] = useState(false);
   const [viewing, setViewing] = useState<ContentRow | null>(null);
   const [pending, setPending] = useState<StudioSession | null>(null);
+  // Ücretsiz kullanıcı için gerçek içerik sayısı — badge'te "N hak kaldı" göstermek için.
+  const [totalContent, setTotalContent] = useState(0);
+  const FREE_LIMIT = 3;
+  const remainingFree = Math.max(0, FREE_LIMIT - totalContent);
+
+  // Kayıt başlatmayı ücretsiz limite bağla
+  const onStartRecording = useCallback(() => {
+    if (!isPro && totalContent >= FREE_LIMIT) {
+      alertMsg("Ücretsiz limit doldu", "3 içerik hakkını kullandın. Pro'ya geçerek limitsiz devam et.");
+      setPaywall(true);
+      return;
+    }
+    onStartRecordingRaw?.();
+  }, [onStartRecordingRaw, isPro, totalContent]);
 
   const handleUpload = useCallback(async () => {
+    // Free limit gate — 3 hak dolduysa direkt paywall
+    if (!isPro && totalContent >= FREE_LIMIT) {
+      alertMsg("Ücretsiz limit doldu", "3 içerik hakkını kullandın. Pro'ya geçerek limitsiz devam et.");
+      setPaywall(true);
+      return;
+    }
     const r = await pickAudioFile();
     if (r.ok) { onUploadAudio?.(r.rec); return; }
     if (r.reason === "too_large") alertMsg("Dosya çok büyük", "En fazla 20MB ses dosyası yükleyebilirsin.");
     else if (r.reason === "error") alertMsg("Yükleme", r.message ?? "Dosya seçilemedi.");
-  }, [onUploadAudio]);
+  }, [onUploadAudio, isPro, totalContent]);
 
   const loadRecent = useCallback(() => {
     listContent()
-      .then((r) => setRecent(r.slice(0, 3)))
+      .then((r) => { setTotalContent(r.length); setRecent(r.slice(0, 3)); })
       .catch(() => setRecent([]));
     loadStudioSession().then((s) => setPending(s && (s.transcript.trim() || s.draft.trim()) ? s : null)).catch(() => {});
   }, []);
@@ -147,7 +167,16 @@ export default function StudioScreen({ onStartRecording, onUploadAudio, onResume
       {recent === null ? (
         <View style={styles.rcLoading}><ActivityIndicator color={c.accent} /></View>
       ) : recent.length === 0 ? (
-        <Text style={styles.rcEmpty}>Henüz kayıt yok — yukarıdan ilk kaydını yap.</Text>
+        <View style={styles.emptyCard}>
+          <View style={styles.emptyIcon}><MicSmallIcon color={c.accent} /></View>
+          <Text style={styles.emptyTitle}>İlk içeriğin bir tık uzakta.</Text>
+          <Text style={styles.emptyDesc}>
+            Mikrofona basıp doğal konuş — Mindfolio sesini içeriğe dönüştürür. Hazır olduğunda LinkedIn, X, Substack ve Medium çıktısı tek dokunuşta.
+          </Text>
+          <TouchableOpacity style={styles.emptyCta} activeOpacity={0.85} onPress={onStartRecording}>
+            <Text style={styles.emptyCtaText}>Kayda Başla →</Text>
+          </TouchableOpacity>
+        </View>
       ) : (
         <View style={styles.rcList}>
           {recent.map((r) => {
@@ -176,7 +205,9 @@ export default function StudioScreen({ onStartRecording, onUploadAudio, onResume
       {!isPro && (
         <TouchableOpacity style={styles.freeBadge} activeOpacity={0.8} onPress={() => setPaywall(true)}>
           <LockIcon color={c.amber} />
-          <Text style={styles.freeBadgeText}>Ücretsiz · 30sn limit · 3 hak kaldı</Text>
+          <Text style={styles.freeBadgeText}>
+            Ücretsiz · 30sn limit · {remainingFree > 0 ? `${remainingFree} hak kaldı` : "Limit doldu"}
+          </Text>
         </TouchableOpacity>
       )}
     </ScrollView>
@@ -388,15 +419,7 @@ function makeStyles(c: Palette) {
     hdrRight: { flexDirection: "row", alignItems: "center", gap: 10 },
     pgTitle: { fontSize: 28, fontWeight: "700", letterSpacing: -1, color: c.text1 },
     pgDesc: { fontSize: 13, color: c.text3, marginTop: 2 },
-    streak: {
-      paddingHorizontal: 12,
-      paddingVertical: 6,
-      borderRadius: radii.pill,
-      backgroundColor: c.glassFill,
-      borderWidth: 1,
-      borderColor: c.glassBorder,
-    },
-    streakText: { fontSize: 13, fontWeight: "600", color: c.text2 },
+    // (Streak / gamification removed per design brief — gamification YOK.)
 
     micHero: { alignItems: "center", marginTop: 24, marginBottom: 20 },
     micShadow: {
@@ -432,6 +455,37 @@ function makeStyles(c: Palette) {
 
     rcLoading: { paddingVertical: 24, alignItems: "center", marginBottom: 14 },
     rcEmpty: { fontSize: 13, color: c.text4, marginBottom: 14 },
+
+    // Empty state — ilk kullanım
+    emptyCard: {
+      padding: 22,
+      borderRadius: radii.card,
+      backgroundColor: c.glassFill,
+      borderWidth: 1,
+      borderColor: c.glassBorder,
+      alignItems: "center",
+      marginBottom: 16,
+    },
+    emptyIcon: {
+      width: 56,
+      height: 56,
+      borderRadius: 28,
+      backgroundColor: c.accentGhost,
+      borderWidth: 1,
+      borderColor: c.mintBorder,
+      alignItems: "center",
+      justifyContent: "center",
+      marginBottom: 14,
+    },
+    emptyTitle: { fontSize: 17, fontWeight: "700", color: c.text1, marginBottom: 6, textAlign: "center" },
+    emptyDesc: { fontSize: 13, color: c.text2, lineHeight: 19, textAlign: "center", marginBottom: 16 },
+    emptyCta: {
+      paddingHorizontal: 22,
+      paddingVertical: 11,
+      borderRadius: radii.btn,
+      backgroundColor: c.accent,
+    },
+    emptyCtaText: { fontSize: 14, fontWeight: "700", color: "#fff" },
     pendingCard: {
       flexDirection: "row", alignItems: "center", gap: 10,
       paddingVertical: 11, paddingHorizontal: 13, borderRadius: 13, marginBottom: 8,

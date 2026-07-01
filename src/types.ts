@@ -43,6 +43,8 @@ export interface Answers {
   antiposition: string[];
   inspiration: string[];
   importedContent: string;
+  "linkedin-url": string;
+  "import-content": string;
   differentiator: string;
   goals: string[];
   "voice-calibrate": string;

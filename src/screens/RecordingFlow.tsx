@@ -22,7 +22,7 @@ import {
   type RecordingResult,
 } from "../lib/recorder";
 import { transcribeAudio, generate, type GenFormat } from "../lib/ai";
-import { saveContent } from "../lib/data";
+import { saveContent, isProUser } from "../lib/data";
 import { confirmAsync, alertMsg } from "../lib/confirm";
 import { loadStudioSession, saveStudioSession, clearStudioSession } from "../lib/studio-session";
 import { isTR } from "../lib/i18n";
@@ -31,6 +31,9 @@ import { Markdown } from "../components/Markdown";
 
 type Step = "countdown" | "recording" | "segments" | "transcribing" | "transcript" | "generating" | "draft";
 type Segment = { id: number; rec: RecordingResult; duration: number };
+
+const platLabel = (f: GenFormat) =>
+  f === "linkedin" ? "LinkedIn" : f === "x" ? "X / Twitter" : f === "substack" ? "Substack" : f === "medium" ? "Medium" : "Blog";
 
 interface Props {
   onExit: () => void;
@@ -73,7 +76,24 @@ export default function RecordingFlow({ onExit, initialUpload, resumeDirect }: P
   const [excerpts, setExcerpts] = useState<Partial<Record<GenFormat, string>>>({});
   const [busyFormat, setBusyFormat] = useState<GenFormat | null>(null);
   const [saving, setSaving] = useState(false);
+  const [isPro, setIsPro] = useState(false);
+  useEffect(() => { isProUser().then(setIsPro); }, []);
+  // Ücretsiz kullanıcı için kayıt üst limiti (saniye)
+  const FREE_MAX_SECS = 30;
+  // Studio paylaş animasyonu — sharePl: hangi platform o anda paylaşılıyor; sharedPls: kalıcı durum.
+  const [sharePl, setSharePl] = useState<GenFormat | null>(null);
+  const [sharedPls, setSharedPls] = useState<Partial<Record<GenFormat, boolean>>>({});
   const segId = useRef(0);
+
+  // Paylaş — 2.2s pulse animasyonu sonra ✓ Paylaşıldı kalıcı.
+  const doShare = (fmt: GenFormat) => {
+    if (sharePl) return;
+    setSharePl(fmt);
+    setTimeout(() => {
+      setSharedPls((prev) => ({ ...prev, [fmt]: true }));
+      setSharePl(null);
+    }, 2200);
+  };
 
   // On mount: transcribe an uploaded file, resume a saved session, or record.
   useEffect(() => {
@@ -151,6 +171,15 @@ export default function RecordingFlow({ onExit, initialUpload, resumeDirect }: P
     const id = setInterval(() => setSeconds((s) => s + 1), 1000);
     return () => clearInterval(id);
   }, [step, paused]);
+
+  // Ücretsiz kullanıcı için 30sn'de otomatik durdur.
+  useEffect(() => {
+    if (step !== "recording" || paused || isPro) return;
+    if (seconds >= FREE_MAX_SECS) {
+      alertMsg("30 saniye limiti", "Ücretsiz kullanımda kayıt 30 saniye ile sınırlı. Pro'ya geçerek limitsiz kayıt yap.");
+      endSegment();
+    }
+  }, [seconds, step, paused, isPro]);
 
   const togglePause = async () => {
     if (paused) { await resumeRecording(); setPaused(false); }
@@ -240,8 +269,23 @@ export default function RecordingFlow({ onExit, initialUpload, resumeDirect }: P
     if (busyFormat) return;
     setBusyFormat(format);
     try {
-      const label = format === "x" ? "an X (Twitter)" : format === "substack" ? "a Substack/Medium" : "a LinkedIn";
-      const text = await generate(buildPrompt(`Generate ${label} post — start with a strong hook, then a concise summary — from this draft:\n\n${draft}`), format);
+      const label = format === "x" ? "an X (Twitter)" : format === "substack" ? "a Substack" : format === "medium" ? "a Medium" : "a LinkedIn";
+      // Platform karakter sınırları — sonda kısa bir kaynak linki için 24 karakter yer bırak.
+      const charLimit =
+        format === "x" ? 280 - 24 :
+        format === "linkedin" ? 1500 - 24 :
+        format === "substack" ? 400 - 24 :
+        format === "medium" ? 300 - 24 :
+        800;
+      // Çıktı dili taslakla aynı — outLang state'i buradaki dil (Turkish / English / vs.)
+      const langInstruction = `Write the post in ${outLang}. Do not translate — match the exact language of the source draft.`;
+      const linkReserveInstruction = `Keep the total length under ${charLimit} characters so the author can append a short source link.`;
+      const text = await generate(
+        buildPrompt(
+          `Generate ${label} post — start with a strong hook, then a concise summary — from this draft.\n${langInstruction}\n${linkReserveInstruction}\n\nDraft:\n${draft}`
+        ),
+        format,
+      );
       setExcerpts((p) => {
         const next = { ...p, [format]: text };
         saveStudioSession({ excerpts: next as Record<string, string> });
@@ -258,9 +302,10 @@ export default function RecordingFlow({ onExit, initialUpload, resumeDirect }: P
     setSaving(true);
     try {
       const title = (draft.split("\n").find((l) => l.trim())?.slice(0, 80)) || transcript.slice(0, 80) || "Yeni içerik";
-      await saveContent({ title, body: draft });
+      // Platform çıktılarını da kaydet — X/LinkedIn/Substack/Medium kayboluyordu.
+      await saveContent({ title, body: draft, excerpts: excerpts as Record<string, string> });
       await clearStudioSession();
-      alertMsg("Kaydedildi", "Taslağın Content'e kaydedildi.");
+      alertMsg("Kaydedildi", "Taslağın kaydedildi.");
       onExit();
     } catch (e: any) {
       alertMsg("Kaydetme", e?.message ?? "Kaydedilemedi");
@@ -471,31 +516,51 @@ export default function RecordingFlow({ onExit, initialUpload, resumeDirect }: P
 
         <Text style={styles.secLb}>PLATFORM ÇIKTILARI (hook + özet)</Text>
         <View style={styles.platRow}>
-          {(["linkedin", "x", "substack"] as const).map((f) => (
-            <TouchableOpacity
-              key={f}
-              style={[styles.platBtn, busyFormat === f && styles.disabled]}
-              activeOpacity={0.85}
-              disabled={!!busyFormat}
-              onPress={() => handleExcerpt(f)}
-            >
-              <Text style={styles.platBtnText}>
-                {busyFormat === f ? "..." : f === "linkedin" ? "LinkedIn" : f === "x" ? "X" : "Substack"}
-              </Text>
-            </TouchableOpacity>
-          ))}
+          {(["linkedin", "x", "substack", "medium"] as const).map((f) => {
+            const isShared = !!sharedPls[f];
+            const isSharing = sharePl === f;
+            return (
+              <TouchableOpacity
+                key={f}
+                style={[
+                  styles.platBtn,
+                  busyFormat === f && styles.disabled,
+                  isSharing && styles.platBtnSharing,
+                  isShared && styles.platBtnShared,
+                ]}
+                activeOpacity={0.85}
+                disabled={!!busyFormat || isSharing}
+                onPress={() => {
+                  if (excerpts[f]) doShare(f);
+                  else handleExcerpt(f);
+                }}
+              >
+                <Text style={[styles.platBtnText, isShared && { color: c.accent }]}>
+                  {busyFormat === f
+                    ? "..."
+                    : isSharing
+                      ? "Yükleniyor…"
+                      : isShared
+                        ? "✓ Paylaşıldı"
+                        : excerpts[f]
+                          ? `Paylaş — ${platLabel(f)}`
+                          : platLabel(f)}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
-        {(["linkedin", "x", "substack"] as const).map((f) =>
+        {(["linkedin", "x", "substack", "medium"] as const).map((f) =>
           excerpts[f] ? (
             <View key={f} style={styles.draftCard}>
-              <Text style={styles.draftLabel}>{f === "linkedin" ? "LinkedIn" : f === "x" ? "X" : "Substack / Medium"}</Text>
+              <Text style={styles.draftLabel}>{platLabel(f)}</Text>
               <Markdown text={excerpts[f] ?? ""} />
             </View>
           ) : null
         )}
 
         <TouchableOpacity style={[styles.primaryBtn, saving && styles.disabled]} activeOpacity={0.85} disabled={saving} onPress={handleSave}>
-          <Text style={styles.primaryBtnText}>{saving ? "Kaydediliyor…" : "Content'e Kaydet"}</Text>
+          <Text style={styles.primaryBtnText}>{saving ? "Kaydediliyor…" : "Taslağı Kaydet"}</Text>
         </TouchableOpacity>
       </ScrollView>
     </View>
@@ -651,8 +716,30 @@ function makeStyles(c: Palette) {
     draftCard: { padding: 16, borderRadius: radii.card, backgroundColor: c.glassFill, borderWidth: 1, borderColor: c.glassBorder, marginBottom: 10 },
     draftLabel: { fontSize: 11, fontWeight: "700", letterSpacing: 0.5, color: c.accent, textTransform: "uppercase", marginBottom: 8 },
     draftText: { fontSize: 14, color: c.text1, lineHeight: 21 },
-    platRow: { flexDirection: "row", gap: 8, marginBottom: 6 },
-    platBtn: { flex: 1, paddingVertical: 12, borderRadius: radii.btn, backgroundColor: c.glassFill, borderWidth: 1, borderColor: c.glassBorder, alignItems: "center" },
+    platRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 6 },
+    platBtn: {
+      flexBasis: "48%",
+      flexGrow: 1,
+      paddingVertical: 12,
+      borderRadius: radii.btn,
+      backgroundColor: c.glassFill,
+      borderWidth: 1,
+      borderColor: c.glassBorder,
+      alignItems: "center",
+    },
     platBtnText: { fontSize: 13, fontWeight: "600", color: c.text2 },
+    // shareGen pulse durumu
+    platBtnSharing: {
+      borderColor: c.accent,
+      backgroundColor: c.accentGhost,
+      shadowColor: c.accent,
+      shadowOpacity: 0.35,
+      shadowRadius: 8,
+      shadowOffset: { width: 0, height: 0 },
+    },
+    platBtnShared: {
+      borderColor: c.mintBorder,
+      backgroundColor: c.mintBg,
+    },
   });
 }

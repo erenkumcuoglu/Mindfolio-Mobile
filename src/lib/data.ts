@@ -229,6 +229,7 @@ export async function saveContent(input: {
   category?: string;
   scheduled_at?: string | null;
   source?: ContentSource;
+  excerpts?: Record<string, string>;
 }): Promise<ContentRow> {
   const { data: userData } = await supabase.auth.getUser();
   const userId = userData.user?.id;
@@ -241,6 +242,10 @@ export async function saveContent(input: {
   };
   // Only set source when provided so inserts still work pre-migration.
   if (input.source) row.source = input.source;
+  // Platform excerpts — X/LinkedIn/Substack/Medium çıktıları kalıcılaştır
+  if (input.excerpts && Object.keys(input.excerpts).length > 0) {
+    row.excerpts = input.excerpts;
+  }
   const { data, error } = await supabase
     .from("content")
     .insert(row)

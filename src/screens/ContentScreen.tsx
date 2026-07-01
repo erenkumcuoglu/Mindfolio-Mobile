@@ -17,6 +17,7 @@ import { useTheme } from "../theme/ThemeContext";
 import { radii, spacing, type Palette } from "../theme/tokens";
 import { EmptyState } from "../components/EmptyState";
 import { DocIcon } from "../components/icons";
+import { Markdown } from "../components/Markdown";
 import {
   listContent,
   saveContent,
@@ -287,6 +288,24 @@ function ContentEditor({ mode, visible, item, pillars, onClose, onSaved }: {
   const [saving, setSaving] = useState(false);
   const [excerpts, setExcerpts] = useState<Excerpts>({});
   const [busyFmt, setBusyFmt] = useState<GenFormat | null>(null);
+  // Görüntüleme / düzenleme modları — edit sheet açıldığında önizleme default
+  const [preview, setPreview] = useState(true);
+
+  // "Başlık 1: ..." tarzı AI çıktısını parse et — üstte ayrı bir bölüme al.
+  // Gemini "blog" formatı: `Başlık 1: X\nBaşlık 2: Y\nBaşlık 3: Z\n\n<body>` şeklinde döner.
+  const { titles: titleAlts, cleanBody } = (() => {
+    const src = body ?? "";
+    const lines = src.split(/\r?\n/);
+    const heads: string[] = [];
+    let i = 0;
+    while (i < lines.length && /^\s*Başlık\s*\d+\s*[:：]\s*/i.test(lines[i])) {
+      heads.push(lines[i].replace(/^\s*Başlık\s*\d+\s*[:：]\s*/i, "").trim());
+      i++;
+    }
+    // Ayırıcı boş satırları at
+    while (i < lines.length && !lines[i].trim()) i++;
+    return { titles: heads, cleanBody: heads.length ? lines.slice(i).join("\n") : src };
+  })();
 
   // Swipe down on the handle to dismiss.
   const closePan = useRef(
@@ -398,8 +417,53 @@ function ContentEditor({ mode, visible, item, pillars, onClose, onSaved }: {
                   <Text style={styles.hint}>Pillar'ların onboarding'de oluşur.</Text>
                 )}
 
-                <Text style={styles.fieldLb}>İçerik</Text>
-                <TextInput style={[styles.input, styles.bodyInput]} placeholder="Taslak metni…" placeholderTextColor={c.text4} value={body} onChangeText={setBody} multiline textAlignVertical="top" />
+                {/* Başlık alternatifleri — sadece AI çıktısında `Başlık 1: …` yakalanırsa görünür */}
+                {titleAlts.length > 0 && (
+                  <>
+                    <Text style={styles.fieldLb}>BAŞLIK ALTERNATİFLERİ</Text>
+                    <View style={{ gap: 8 }}>
+                      {titleAlts.map((h, i) => (
+                        <TouchableOpacity
+                          key={i}
+                          activeOpacity={0.85}
+                          onPress={() => setTitle(h)}
+                          style={{
+                            padding: 12,
+                            borderRadius: radii.card,
+                            backgroundColor: c.glassFill,
+                            borderWidth: 1,
+                            borderColor: title === h ? c.accent : c.glassBorder,
+                          }}
+                        >
+                          <Text style={{ fontSize: 13, color: c.text1, lineHeight: 19 }} numberOfLines={2}>{i + 1}. {h}</Text>
+                          <Text style={{ fontSize: 11, color: c.text4, marginTop: 2 }}>
+                            {title === h ? "✓ Seçili başlık" : "Bu başlığı seç"}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </>
+                )}
+
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 14 }}>
+                  <Text style={styles.fieldLb}>İçerik</Text>
+                  <TouchableOpacity onPress={() => setPreview((p) => !p)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+                    <Text style={{ fontSize: 12, color: c.accent, fontWeight: "600" }}>
+                      {preview ? "Düzenle" : "Önizle"}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+                {preview ? (
+                  <View style={[styles.input, styles.bodyInput, { paddingVertical: 14 }]}>
+                    {cleanBody.trim() ? (
+                      <Markdown text={cleanBody} />
+                    ) : (
+                      <Text style={{ fontSize: 14, color: c.text4 }}>Taslak metni…</Text>
+                    )}
+                  </View>
+                ) : (
+                  <TextInput style={[styles.input, styles.bodyInput]} placeholder="Taslak metni…" placeholderTextColor={c.text4} value={body} onChangeText={setBody} multiline textAlignVertical="top" />
+                )}
 
                 {mode === "edit" && body.trim().length > 0 && (
                   <>

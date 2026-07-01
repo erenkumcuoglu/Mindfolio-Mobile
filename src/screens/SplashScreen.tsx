@@ -7,14 +7,17 @@ import { useT } from "../lib/i18n";
 import { typography, type Palette } from "../theme/tokens";
 
 function Mark({ c, size = 72 }: { c: Palette; size?: number }) {
+  // V2 — 4 bar (tepe formu, dıştan içe büyüyen) + 3 text çizgisi. CLAUDE.md spec.
   return (
     <Svg width={size} height={size} viewBox="0 0 26 26" fill="none">
       <Rect width="26" height="26" rx="6.5" fill={c.mintBg} stroke={c.mintBorder} strokeWidth="1" />
-      <Rect x="3" y="10.5" width="2.4" height="5" rx="1.2" fill={c.accent} opacity={0.55} />
-      <Rect x="7" y="6.5" width="2.4" height="13" rx="1.2" fill={c.accent} opacity={0.85} />
-      <Rect x="11" y="5" width="2.4" height="16" rx="1.2" fill={c.accent} />
-      <Rect x="15" y="8" width="2.4" height="10" rx="1.2" fill={c.accent} opacity={0.7} />
-      <Rect x="19" y="10.5" width="2.4" height="5" rx="1.2" fill={c.accent} opacity={0.5} />
+      <Rect x="1.5" y="10.5" width="2" height="5" rx="1" fill={c.accent} opacity={0.55} />
+      <Rect x="4.5" y="6.5" width="2" height="13" rx="1" fill={c.accent} opacity={0.85} />
+      <Rect x="7.5" y="5" width="2" height="16" rx="1" fill={c.accent} />
+      <Rect x="10.5" y="7" width="2" height="12" rx="1" fill={c.accent} opacity={0.7} />
+      <Rect x="15" y="9.5" width="7" height="1.7" rx={0.85} fill={c.text1} opacity={0.55} />
+      <Rect x="15" y="12.5" width="8.5" height="1.7" rx={0.85} fill={c.text1} opacity={0.45} />
+      <Rect x="15" y="15.5" width="5.5" height="1.7" rx={0.85} fill={c.text1} opacity={0.38} />
     </Svg>
   );
 }

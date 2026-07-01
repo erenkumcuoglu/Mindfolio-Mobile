@@ -180,22 +180,51 @@ export default function ProfileScreen({ onLogout }: Props) {
     }
   };
 
-  const persistPillars = async (next: string[]) => {
-    setPillars(next);
-    try { await savePillars(next.map((title) => ({ title }))); }
-    catch { alertMsg("Kaydetme", "Pillar kaydedilemedi (persona tablosu gerekebilir)."); }
+  // 5.3 — Pillar açıklama editörü (başlık + açıklama)
+  const [newDesc, setNewDesc] = useState("");
+
+  // Mevcut pillar'ları title+description olarak tut (mobile state şu an sadece title array idi)
+  const pillarsFull: { title: string; description: string }[] = (profile?.pillars ?? [])
+    .filter((p) => !!p.title)
+    .map((p) => ({ title: p.title, description: p.description ?? "" }));
+
+  const persistPillarsFull = async (next: { title: string; description: string }[]) => {
+    setPillars(next.map((p) => p.title));
+    try { await savePillars(next); }
+    catch { alertMsg("Kaydetme", "Pillar kaydedilemedi."); }
   };
+
   const addOrUpdatePillar = () => {
-    const v = newPillar.trim();
-    if (!v) { setEditingIdx(null); setNewPillar(""); return; }
-    let next: string[];
-    if (editingIdx != null) next = pillars.map((p, i) => (i === editingIdx ? v : p));
-    else next = pillars.includes(v) ? pillars : [...pillars, v];
-    persistPillars(next);
+    // 5.4 — Persona kilidi ↔ pillar hizalama: ayda 1 kez kuralı pillar'a da uygulanır.
+    if (!canEditPersona) { setLockModal(true); return; }
+    const title = newPillar.trim();
+    const desc = newDesc.trim();
+    if (!title) { setEditingIdx(null); setNewPillar(""); setNewDesc(""); return; }
+    const current: { title: string; description: string }[] = pillarsFull.length
+      ? pillarsFull
+      : pillars.map((t) => ({ title: t, description: descFor(t) }));
+    let next: { title: string; description: string }[];
+    if (editingIdx != null) next = current.map((p, i) => (i === editingIdx ? { title, description: desc } : p));
+    else next = current.some((p) => p.title === title) ? current : [...current, { title, description: desc }];
+    persistPillarsFull(next);
     setNewPillar("");
+    setNewDesc("");
     setEditingIdx(null);
   };
-  const removePillar = (i: number) => persistPillars(pillars.filter((_, idx) => idx !== i));
+  const removePillar = (i: number) => {
+    if (!canEditPersona) { setLockModal(true); return; }
+    const current: { title: string; description: string }[] = pillarsFull.length
+      ? pillarsFull
+      : pillars.map((t) => ({ title: t, description: descFor(t) }));
+    persistPillarsFull(current.filter((_, idx) => idx !== i));
+  };
+
+  // 3 state — profile state hesapla (Ücretsiz / Pro·Eksik / Pro·Tam)
+  const isProSub = !!profile?.subscription?.active;
+  const hasFullStrategy = !!(profile?.pillars?.length && profile?.voice_profile?.length && profile?.sample_post);
+  const profileState: "free" | "pro-incomplete" | "pro-complete" = !isProSub
+    ? "free"
+    : hasFullStrategy ? "pro-complete" : "pro-incomplete";
 
   const [promo, setPromo] = useState("");
   const [promoLoading, setPromoLoading] = useState(false);
@@ -264,6 +293,35 @@ export default function ProfileScreen({ onLogout }: Props) {
         <View style={styles.loading}><ActivityIndicator color={c.accent} /></View>
       ) : (
         <>
+          {/* 3-state banner: Pro·Eksik → kurulum checklist */}
+          {profileState === "pro-incomplete" && (
+            <View style={styles.setupBanner}>
+              <Text style={styles.setupTitle}>Stratejini tamamla</Text>
+              <Text style={styles.setupDesc}>Persona oluşturuldu; pillar'lar, ses profili ve örnek post kuruluma bekliyor.</Text>
+              <View style={styles.setupItem}>
+                <Text style={[styles.setupCheck, { color: positioning ? c.accent : c.text4 }]}>{positioning ? "✓" : "○"}</Text>
+                <Text style={styles.setupItemText}>Konumlandırma</Text>
+              </View>
+              <View style={styles.setupItem}>
+                <Text style={[styles.setupCheck, { color: (profile?.pillars?.length ?? 0) > 0 ? c.accent : c.text4 }]}>{(profile?.pillars?.length ?? 0) > 0 ? "✓" : "○"}</Text>
+                <Text style={styles.setupItemText}>İçerik pillar'ları</Text>
+              </View>
+              <View style={styles.setupItem}>
+                <Text style={[styles.setupCheck, { color: voice.length > 0 ? c.accent : c.text4 }]}>{voice.length > 0 ? "✓" : "○"}</Text>
+                <Text style={styles.setupItemText}>Ses profili</Text>
+              </View>
+              <View style={styles.setupItem}>
+                <Text style={[styles.setupCheck, { color: samplePost ? c.accent : c.text4 }]}>{samplePost ? "✓" : "○"}</Text>
+                <Text style={styles.setupItemText}>Örnek post</Text>
+              </View>
+              <TouchableOpacity style={styles.setupCta} onPress={startEditPos} activeOpacity={0.85}>
+                <Text style={styles.setupCtaText}>Kurulumu Tamamla →</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* (Ücretsiz kullanıcı için üst banner KALDIRILDI — App Screens v2 tasarımına göre tek reveal, pillar'ların altında.) */}
+
           <View style={styles.lbRow}>
             <Text style={styles.stratLb}>PERSONA & STRATEJİ</Text>
             {!editingPos && (
@@ -328,91 +386,147 @@ export default function ProfileScreen({ onLogout }: Props) {
           )}
 
           <Text style={styles.stratLb}>İÇERİK PILLAR'LARI</Text>
-          <View style={styles.pillarsCard}>
-            {pillars.map((p, i) => {
-              const desc = descFor(p);
-              return (
-                <View key={i} style={[styles.pillarItem, i > 0 && styles.pillarBorder]}>
-                  <View style={styles.pillarHeadRow}>
-                    <View style={styles.pillarNum}><Text style={styles.pillarNumText}>{i + 1}</Text></View>
-                    <Text style={styles.pillarTxt} numberOfLines={2}>{p}</Text>
-                    <TouchableOpacity onPress={() => { setEditingIdx(i); setNewPillar(p); }} hitSlop={8}>
-                      <Text style={styles.pillarEdit}>✎</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={() => removePillar(i)} hitSlop={8}>
-                      <Text style={styles.pillarDel}>×</Text>
-                    </TouchableOpacity>
-                  </View>
-                  {desc ? <Text style={styles.pillarDesc}>{desc}</Text> : null}
-                </View>
-              );
-            })}
-            <View style={[styles.pillarAddRow, pillars.length > 0 && styles.pillarBorder]}>
-              <TextInput
-                style={styles.pillarInput}
-                value={newPillar}
-                onChangeText={setNewPillar}
-                placeholder={editingIdx != null ? "Pillar'ı düzenle…" : "Yeni pillar ekle…"}
-                placeholderTextColor={c.text4}
-                onSubmitEditing={addOrUpdatePillar}
-                returnKeyType="done"
-              />
-              <TouchableOpacity style={styles.pillarAddBtn} onPress={addOrUpdatePillar}>
-                <Text style={styles.pillarAddText}>{editingIdx != null ? "Kaydet" : "Ekle"}</Text>
-              </TouchableOpacity>
+          {/* 5.4 — Persona kilidi banner uyarı */}
+          {!canEditPersona && (
+            <View style={styles.lockBanner}>
+              <Text style={styles.lockBannerTitle}>Düzenleme kilitli</Text>
+              <Text style={styles.lockBannerText}>
+                Persona bu ay güncellendi. Pillar'lar persona kilidine bağlıdır
+                {nextEditDate ? ` — sıradaki: ${nextEditDate}` : ""}.
+              </Text>
             </View>
+          )}
+          <View style={styles.pillarsCard}>
+            {(() => {
+              // Ücretsiz kullanıcı için ilk 2 pillar tam görünür (edit butonları olmadan).
+              // Kalan pillar'lar hiç render edilmez; onun yerine tek lock kartı gösterilir.
+              const isFree = profileState === "free";
+              const visible = isFree ? pillars.slice(0, 2) : pillars;
+              return visible.map((p, i) => {
+                const desc = descFor(p);
+                return (
+                  <View key={i} style={[styles.pillarItem, i > 0 && styles.pillarBorder]}>
+                    <View style={styles.pillarHeadRow}>
+                      <View style={styles.pillarNum}><Text style={styles.pillarNumText}>{i + 1}</Text></View>
+                      <Text style={styles.pillarTxt} numberOfLines={2}>{p}</Text>
+                      {!isFree && (
+                        <>
+                          <TouchableOpacity onPress={() => { setEditingIdx(i); setNewPillar(p); setNewDesc(desc); }} hitSlop={8}>
+                            <Text style={[styles.pillarEdit, !canEditPersona && { opacity: 0.35 }]}>✎</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity onPress={() => removePillar(i)} hitSlop={8}>
+                            <Text style={[styles.pillarDel, !canEditPersona && { opacity: 0.35 }]}>×</Text>
+                          </TouchableOpacity>
+                        </>
+                      )}
+                    </View>
+                    {desc ? <Text style={styles.pillarDesc}>{desc}</Text> : null}
+                  </View>
+                );
+              });
+            })()}
+            {/* 5.3 — Başlık + Açıklama editörü (Ücretsiz kullanıcıda gizli) */}
+            {profileState !== "free" && (
+              <View style={[styles.pillarAddRow, pillars.length > 0 && styles.pillarBorder, { flexDirection: "column", alignItems: "stretch", gap: 8 }]}>
+                <TextInput
+                  style={styles.pillarInput}
+                  value={newPillar}
+                  onChangeText={setNewPillar}
+                  placeholder={editingIdx != null ? "Pillar başlığı…" : "Yeni pillar başlığı…"}
+                  placeholderTextColor={c.text4}
+                  editable={canEditPersona}
+                />
+                <TextInput
+                  style={[styles.pillarInput, { minHeight: 60, textAlignVertical: "top" }]}
+                  value={newDesc}
+                  onChangeText={setNewDesc}
+                  placeholder="Bu pillar ne hakkında? (kısa açıklama)"
+                  placeholderTextColor={c.text4}
+                  multiline
+                  editable={canEditPersona}
+                />
+                <TouchableOpacity
+                  style={[styles.pillarAddBtn, !canEditPersona && { opacity: 0.5 }]}
+                  onPress={addOrUpdatePillar}
+                  disabled={!canEditPersona}
+                >
+                  <Text style={styles.pillarAddText}>{editingIdx != null ? "Güncelle" : "Ekle"}</Text>
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
 
-          {voice.length > 0 && (
-            <>
-              <Text style={styles.stratLb}>SES PROFİLİ{toneStyle ? ` · ${toneStyle}` : ""}</Text>
-              <View style={styles.vTagRow}>
-                {voice.map((v, i) => (
-                  <View key={v + i} style={styles.vTag}><Text style={styles.vTagText}>{v}</Text></View>
-                ))}
-              </View>
-              {toneVoice ? <Text style={styles.stratBody}>{toneVoice}</Text> : null}
-            </>
+          {/* TEK reveal — App Screens v2: pillar'lardan hemen sonra, bir card */}
+          {profileState === "free" && (
+            <View style={styles.freeUnlockCard}>
+              <Text style={styles.freeUnlockLock}>🔒 Pillar'lar ve Ses Profili kilitli</Text>
+              <Text style={styles.freeUnlockTitle}>Stratejinin tamamını gör</Text>
+              <Text style={styles.freeUnlockDesc}>
+                Pro üye ol; kalan pillar'larını, ses profilini, farklılaşmanı ve senin sesinden örnek postu aç.
+              </Text>
+              <TouchableOpacity style={styles.freeUnlockCta} onPress={() => setPaywall(true)} activeOpacity={0.85}>
+                <Text style={styles.freeUnlockCtaText}>Pro'ya Geç →</Text>
+              </TouchableOpacity>
+            </View>
           )}
 
-          {(diffDo.length > 0 || diffDont.length > 0) && (
+          {/* Ücretsiz kullanıcı için voice/farklılaşma/örnek post/hedef kitle/değerler render EDİLMEZ.
+              Yukarıdaki tek freeUnlockCard bunları temsil ediyor.
+              Ücretsiz kullanıcı yine referral, promo, ayarlar ve çıkış bölümlerine erişebilir. */}
+          {profileState !== "free" && (
             <>
-              <Text style={styles.stratLb}>FARKLILAŞMA</Text>
-              <View style={styles.diffRow}>
-                <View style={styles.diffCol}>
-                  <Text style={styles.diffDoLb}>✓ Yap</Text>
-                  {diffDo.map((d, i) => <Text key={i} style={styles.diffItem}>• {d}</Text>)}
-                </View>
-                <View style={styles.diffCol}>
-                  <Text style={styles.diffDontLb}>✕ Kaçın</Text>
-                  {diffDont.map((d, i) => <Text key={i} style={styles.diffItem}>• {d}</Text>)}
-                </View>
-              </View>
+              {voice.length > 0 && (
+                <>
+                  <Text style={styles.stratLb}>SES PROFİLİ{toneStyle ? ` · ${toneStyle}` : ""}</Text>
+                  <View style={styles.vTagRow}>
+                    {voice.map((v, i) => (
+                      <View key={v + i} style={styles.vTag}><Text style={styles.vTagText}>{v}</Text></View>
+                    ))}
+                  </View>
+                  {toneVoice ? <Text style={styles.stratBody}>{toneVoice}</Text> : null}
+                </>
+              )}
+
+              {(diffDo.length > 0 || diffDont.length > 0) && (
+                <>
+                  <Text style={styles.stratLb}>FARKLILAŞMA</Text>
+                  <View style={styles.diffRow}>
+                    <View style={styles.diffCol}>
+                      <Text style={styles.diffDoLb}>✓ Yap</Text>
+                      {diffDo.map((d, i) => <Text key={i} style={styles.diffItem}>• {d}</Text>)}
+                    </View>
+                    <View style={styles.diffCol}>
+                      <Text style={styles.diffDontLb}>✕ Kaçın</Text>
+                      {diffDont.map((d, i) => <Text key={i} style={styles.diffItem}>• {d}</Text>)}
+                    </View>
+                  </View>
+                </>
+              )}
+
+              {audience ? (
+                <>
+                  <Text style={styles.stratLb}>HEDEF KİTLE</Text>
+                  <View style={styles.stratCard}><Text style={styles.stratBody}>{audience}</Text></View>
+                </>
+              ) : null}
+
+              {values.length > 0 && (
+                <>
+                  <Text style={styles.stratLb}>DEĞERLER</Text>
+                  <View style={styles.vTagRow}>
+                    {values.map((v, i) => (<View key={v + i} style={styles.vTag}><Text style={styles.vTagText}>{v}</Text></View>))}
+                  </View>
+                </>
+              )}
+
+              {samplePost ? (
+                <>
+                  <Text style={styles.stratLb}>ÖRNEK POST</Text>
+                  <View style={styles.sampleCard}><Text style={styles.sampleTx}>{samplePost}</Text></View>
+                </>
+              ) : null}
             </>
           )}
-
-          {audience ? (
-            <>
-              <Text style={styles.stratLb}>HEDEF KİTLE</Text>
-              <View style={styles.stratCard}><Text style={styles.stratBody}>{audience}</Text></View>
-            </>
-          ) : null}
-
-          {values.length > 0 && (
-            <>
-              <Text style={styles.stratLb}>DEĞERLER</Text>
-              <View style={styles.vTagRow}>
-                {values.map((v, i) => (<View key={v + i} style={styles.vTag}><Text style={styles.vTagText}>{v}</Text></View>))}
-              </View>
-            </>
-          )}
-
-          {samplePost ? (
-            <>
-              <Text style={styles.stratLb}>ÖRNEK POST</Text>
-              <View style={styles.sampleCard}><Text style={styles.sampleTx}>{samplePost}</Text></View>
-            </>
-          ) : null}
 
           {(platforms.length > 0 || cadence) && (
             <>
@@ -425,7 +539,6 @@ export default function ProfileScreen({ onLogout }: Props) {
               {cadence ? <Text style={[styles.stratBody, { marginTop: 8 }]}>📅 {cadence}</Text> : null}
             </>
           )}
-
         </>
       )}
 
@@ -674,6 +787,61 @@ function makeStyles(c: Palette) {
     pillarInput: { flex: 1, paddingVertical: 6, fontSize: 14, color: c.text1 },
     pillarAddBtn: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: c.accent },
     pillarAddText: { fontSize: 12, fontWeight: "600", color: "#fff" },
+
+    // 5.4 persona kilit banner
+    lockBanner: {
+      padding: 12,
+      borderRadius: radii.card,
+      backgroundColor: c.amberGhost,
+      borderWidth: 1,
+      borderColor: c.amberBorder,
+      marginBottom: 10,
+    },
+    lockBannerTitle: { fontSize: 12, fontWeight: "700", color: c.amber, marginBottom: 4 },
+    lockBannerText: { fontSize: 12, color: c.text2, lineHeight: 17 },
+
+    // 3-state setup banner (Pro·Eksik / Ücretsiz)
+    setupBanner: {
+      marginTop: 12,
+      padding: 16,
+      borderRadius: radii.card,
+      backgroundColor: c.mintBg,
+      borderWidth: 1,
+      borderColor: c.mintBorder,
+    },
+    setupTitle: { fontSize: 15, fontWeight: "700", color: c.text1, marginBottom: 4 },
+    setupDesc: { fontSize: 12.5, color: c.text2, lineHeight: 18, marginBottom: 12 },
+    setupItem: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 6 },
+    setupCheck: { fontSize: 14, width: 18 },
+    setupItemText: { fontSize: 13, color: c.text2 },
+    setupCta: {
+      marginTop: 12,
+      paddingVertical: 11,
+      borderRadius: radii.btn,
+      backgroundColor: c.accent,
+      alignItems: "center",
+    },
+    setupCtaText: { fontSize: 13, fontWeight: "700", color: "#fff" },
+
+    // App Screens v2 — Ücretsiz kullanıcının pillar'larından hemen sonra gelen TEK reveal kartı
+    freeUnlockCard: {
+      marginTop: 16,
+      padding: 20,
+      borderRadius: radii.card,
+      backgroundColor: c.mintBg,
+      borderWidth: 1,
+      borderColor: c.mintBorder,
+    },
+    freeUnlockLock: { fontSize: 12, fontWeight: "700", color: c.accent, marginBottom: 6, letterSpacing: 0.3 },
+    freeUnlockTitle: { fontSize: 18, fontWeight: "700", color: c.text1, marginBottom: 6 },
+    freeUnlockDesc: { fontSize: 13, color: c.text2, lineHeight: 19, marginBottom: 14 },
+    freeUnlockCta: {
+      paddingVertical: 13,
+      borderRadius: radii.btn,
+      backgroundColor: c.accent,
+      alignItems: "center",
+    },
+    freeUnlockCtaText: { fontSize: 14, fontWeight: "700", color: "#fff" },
 
     vTagRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
     vTag: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: c.glassFill, borderWidth: 1, borderColor: c.glassBorder },

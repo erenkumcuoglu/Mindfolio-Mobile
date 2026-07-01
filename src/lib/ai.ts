@@ -28,7 +28,7 @@ export async function transcribeAudio(rec: RecordingResult): Promise<string> {
   return (data.text as string) ?? "";
 }
 
-export type GenFormat = "blog" | "linkedin" | "x" | "substack" | "raw";
+export type GenFormat = "blog" | "linkedin" | "x" | "substack" | "medium" | "raw";
 
 export async function generate(prompt: string, format: GenFormat): Promise<string> {
   const res = await authedFetch("/api/ai/generate", {
