@@ -378,9 +378,10 @@ const QUESTIONS: Step[] = [
   },
 ];
 
-// Part 2 soruları — YALNIZCA paywall sonrası, ödeme başarılı olursa sorulur.
-// Bu diziyi STEPS'e paywall'dan SONRA insert ediyoruz (aşağıya bak).
-const PART2_QUESTIONS: Step[] = [
+// Part 2 sorular kaldırıldı — kullanıcının Part 1'de verdiği bilgi yeterli.
+// Aşağıdaki dizi artık STEPS akışına eklenmiyor; ileride ihtiyaç halinde kullanmak için tutuluyor.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const _RESERVED_PART2_QUESTIONS: Step[] = [
   {
     id: "hotTakes",
     type: "multi",
@@ -467,34 +468,20 @@ const STEPS: Step[] = [
   // tam stratejiyi Part 2 sonrasında AI ile gerçek bir kalite seviyesinde göstereceğiz.
   // generating-teaser → paywall (teaser persona arka planda kaydediliyor, post-paywall'da gerçek strateji)
   { id: "paywall", type: "paywall" as const, part: 1, title: "Personan hazır. Sıra tam stratejine.", description: "Konumlandırma + pillar'lar + ses profili + örnek post — Pro ile hepsi açılıyor." },
-  // Paywall sonrası geçiş — Part 2'ye "cart diye" düşmesin
+  // ─── Paywall sonrası — Part 2 ────────────────────────────────────────────
+  // ÖNEMLİ: Kullanıcının Part 1'de verdiği bilgi zaten yeterli. Yeniden soru sormak
+  // "aynı şeyleri tekrar soruyorsun" hissi yaratıyor ve inanılırlığı düşürüyor.
+  // Bu yüzden Part 2 hızlı ve etkileyici: welcome → generating-full → 4 reveal → 3 hızlı setup → done.
+  // PART2_QUESTIONS (hotTakes, cadence, antiposition, inspiration) + differentiator + goals
+  // KALDIRILDI. AI zaten Part 1 cevaplarından çıkarım yapıyor.
   {
     id: "p2-intro",
     type: "message",
     part: 2,
-    title: "Aboneliğin aktif. Şimdi daha derine inelim.",
-    description: "Birkaç soruyla farklılaşmanı netleştirelim, sonra tam stratejini AI ile derleyeceğim.",
+    title: "Ödemen alındı. Şimdi sıra sende.",
+    description: "Verdiğin bilgilerle tam stratejini AI ile derliyorum. Bir saniyede önündesin.",
   },
-  // Part 2 soruları — sadece paywall geçildikten sonra sorulur.
-  ...PART2_QUESTIONS.flatMap((q) => {
-    const wId = `warmup-${q.id}`;
-    return [q, { id: wId, type: "warmup" as const, part: 2 as const, title: "", description: "" }];
-  }),
-  { id: "differentiator", type: "single", part: 2, title: "Bakış açını farklı kılan ne?", description: "Seni en iyi tanımlayan ifade.", options: [
-    { id: "exp-founder", emoji: "🏗", label: "Sıfırdan inşa ettim" },
-    { id: "deep-expert", emoji: "🔬", label: "Derin uzmanlık" },
-    { id: "contrarian", emoji: "⚡", label: "Ezberleri sorguluyorum" },
-    { id: "connector", emoji: "🔗", label: "Bağlantılar kuruyorum" },
-  ]},
-  { id: "goals", type: "multi", part: 2, title: "İçeriğinle neyi başarmak istiyorsun?", options: [
-    { id: "audience", emoji: "📈", label: "Kitle inşa etmek" },
-    { id: "leads", emoji: "💼", label: "Talep yaratmak" },
-    { id: "authority", emoji: "🎓", label: "Düşünce liderliği" },
-    { id: "network", emoji: "🤝", label: "Bağlantı kurmak" },
-    { id: "monetize", emoji: "💰", label: "Gelir elde etmek" },
-    { id: "legacy", emoji: "📝", label: "Miras bırakmak" },
-  ]},
-  { id: "generating-full", type: "loader" as const, part: 2, title: "Stratejin oluşturuluyor...", description: "Konumlandırma, pillar'lar, ses profili ve örnek post." },
+  { id: "generating-full", type: "loader" as const, part: 2, title: "Stratejin oluşturuluyor...", description: "Konumlandırma, pillar'lar, ses profili ve örnek post — hepsi seninkine özel." },
   { id: "reveal-full-positioning", type: "reveal" as const, part: 2, title: "İşte sen busun.", description: "Tam stratejin." },
   { id: "reveal-full-pillars", type: "reveal" as const, part: 2, title: "Pillar'ların", description: "Detaylı başlıklar." },
   { id: "reveal-full-voice", type: "reveal" as const, part: 2, title: "Ses profili", description: "Farklılaşma stratejisi." },
@@ -1348,10 +1335,21 @@ export default function OnboardingScreen({ onComplete }: Props) {
     >
       {/* Header — [← Geri] · Part etiketi · adım sayısı · Çıkış */}
       <View style={s.header}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
           {canGoBack() ? (
-            <TouchableOpacity onPress={goBack} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Text style={{ fontSize: 13, color: c.text2, fontWeight: "600" }}>← Geri</Text>
+            <TouchableOpacity
+              onPress={goBack}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={{
+                paddingHorizontal: 10,
+                paddingVertical: 5,
+                borderRadius: 999,
+                backgroundColor: c.glassFill,
+                borderWidth: 1,
+                borderColor: c.glassBorder,
+              }}
+            >
+              <Text style={{ fontSize: 12, color: c.accent, fontWeight: "700" }}>← Geri</Text>
             </TouchableOpacity>
           ) : null}
           <Text style={s.partLabel}>Part {step?.part ?? 1}</Text>
