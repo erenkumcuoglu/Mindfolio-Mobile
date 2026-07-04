@@ -1,6 +1,7 @@
 /** AI calls go through the web API (server holds the model keys). */
+import { Platform } from "react-native";
 import { authedFetch } from "./supabase";
-import { toAudioFormData, type RecordingResult } from "./recorder";
+import { toAudioFormData, toAudioJsonPayload, type RecordingResult } from "./recorder";
 import type { LinkPreview } from "./data";
 
 /** Fetch link preview metadata (thumbnail + title + description) for a URL. */
@@ -19,10 +20,21 @@ export async function fetchLinkPreview(url: string): Promise<LinkPreview | null>
 }
 
 export async function transcribeAudio(rec: RecordingResult): Promise<string> {
-  const res = await authedFetch("/api/ai/transcribe", {
-    method: "POST",
-    body: toAudioFormData(rec),
-  });
+  // Native — JSON base64 body (FormData polyfill'ini bypass etmek için).
+  // Web — multipart FormData (Blob desteği native, sorun yok).
+  let res: Response;
+  if (Platform.OS === "web") {
+    res = await authedFetch("/api/ai/transcribe", {
+      method: "POST",
+      body: toAudioFormData(rec),
+    });
+  } else {
+    const payload = await toAudioJsonPayload(rec);
+    res = await authedFetch("/api/ai/transcribe", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Transkripsiyon başarısız oldu");
   return (data.text as string) ?? "";

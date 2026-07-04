@@ -1,7 +1,8 @@
 {
   "expo": {
-    "name": "mindfolio-mobile",
+    "name": "Mindfolio",
     "slug": "mindfolio-mobile",
+    "scheme": "mindfolio",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -10,7 +11,8 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Mindfolio sesini kaydedip içeriğe dönüştürmek için mikrofona erişir."
-      }
+      },
+      "bundleIdentifier": "com.erenkumcuoglu.mindfolio-mobile"
     },
     "android": {
       "adaptiveIcon": {
@@ -19,14 +21,32 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "permissions": ["RECORD_AUDIO"],
-      "predictiveBackGestureEnabled": false
+      "permissions": [
+        "RECORD_AUDIO",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+      ],
+      "predictiveBackGestureEnabled": false,
+      "package": "com.erenkumcuoglu.mindfoliomobile"
     },
     "plugins": [
-      ["expo-av", { "microphonePermission": "Mindfolio sesini kaydetmek için mikrofona erişir." }]
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Mindfolio sesini kaydetmek için mikrofona erişir."
+        }
+      ]
     ],
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "e16f9f17-23d8-42c5-a207-57b77e876993"
+      }
+    },
+    "owner": "erenkumcuoglu"
   }
 }

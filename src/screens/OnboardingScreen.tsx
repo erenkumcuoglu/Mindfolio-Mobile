@@ -322,6 +322,17 @@ const QUESTIONS: Step[] = [
     placeholder: "linkedin.com/in/kullaniciadi",
     validate: () => true,
   },
+  // 5.1b — Meslek (LinkedIn boşsa AI'ya somut girdi lazım). Doldurulmuş LinkedIn'de bile
+  // spesifik meslek tanımı personayı çok keskinleştirir.
+  {
+    id: "profession",
+    type: "input",
+    part: 1,
+    title: "Mesleğin nedir?",
+    description: "Alan yeterli değil — spesifik meslek. Ör: mimar, kardiyolog, ürün yöneticisi, editör.",
+    placeholder: "Örn: mimar, doktor, yazılım geliştirici, editör…",
+    validate: () => true,
+  },
   // 5.2 — İçerik içe aktar (opsiyonel, skip'lenebilir)
   {
     id: "import-content",
@@ -539,6 +550,7 @@ const defaults: Answers = {
   inspiration: [],
   importedContent: "",
   "linkedin-url": "",
+  profession: "",
   "import-content": "",
   differentiator: "",
   goals: [],
@@ -893,8 +905,10 @@ export default function OnboardingScreen({ onComplete }: Props) {
   const [loading, setLoading] = useState(false);
   const [subscribed, setSubscribed] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState<"monthly" | "yearly">("yearly");
-  // AI çağrısının sonucu: "ok" | "fallback" | null
-  const [aiStatus, setAiStatus] = useState<"ok" | "fallback" | null>(null);
+  // AI çağrısının sonucu: "ok" | "fallback" | "error" | null
+  // "error" — Part 2 (ödeme sonrası) fail olduğunda. Mock persona kaydetmeyiz, retry göstiririz.
+  const [aiStatus, setAiStatus] = useState<"ok" | "fallback" | "error" | null>(null);
+  const [fullRetryCount, setFullRetryCount] = useState(0);
   const [aiErrorMsg, setAiErrorMsg] = useState<string>("");
   const [inviteCode, setInviteCode] = useState("");
   const [applyingCode, setApplyingCode] = useState(false);
@@ -1120,7 +1134,7 @@ export default function OnboardingScreen({ onComplete }: Props) {
         method: "POST",
         body: JSON.stringify({
           goal: gLabel,
-          field: fLabel,
+          field: (answers.profession || "").trim() ? `${fLabel} — ${(answers.profession as string).trim()}` : fLabel,
           hasContent: answers.hasContent,
           voiceTraits: vLabel,
           audience: aLabel,
@@ -1186,7 +1200,7 @@ export default function OnboardingScreen({ onComplete }: Props) {
         method: "POST",
         body: JSON.stringify({
           goal: gLabel,
-          field: fLabel,
+          field: (answers.profession || "").trim() ? `${fLabel} — ${(answers.profession as string).trim()}` : fLabel,
           hasContent: answers.hasContent,
           voiceTraits: vLabel,
           audience: aLabel,
@@ -1203,44 +1217,39 @@ export default function OnboardingScreen({ onComplete }: Props) {
       })
         .then(async (r) => {
           const data = await r.json().catch(() => ({}));
-          if (!r.ok) {
+          if (!r.ok || !data?.profile) {
             // eslint-disable-next-line no-console
             console.warn("[full] AI fail:", r.status, data?.error);
-            setAiStatus("fallback");
+            // KRİTİK: Ödeme sonrası mock persona KAYDETMEyiz — kullanıcı sahte strateji görmesin.
+            // Retry UI göstermeye geç, goNext yapma.
+            setAiStatus("error");
             setAiErrorMsg(data?.error || `HTTP ${r.status}`);
+            setLoading(false);
             return;
           }
-          if (data?.profile) {
-            setPersonaData(data.profile);
-            setAiStatus("ok");
-            setAiErrorMsg("");
-            authedFetch("/api/personas", {
-              method: "PUT",
-              body: JSON.stringify({
-                name: gLabel.slice(0, 60) || "My Persona",
-                profile: data.profile,
-                onboarding_complete: false,
-              }),
-            }).catch(() => {});
-          } else {
-            // eslint-disable-next-line no-console
-            console.warn("[full] AI dönüşü boş:", data);
-            setAiStatus("fallback");
-            setAiErrorMsg("AI boş yanıt döndü");
-          }
+          setPersonaData(data.profile);
+          setAiStatus("ok");
+          setAiErrorMsg("");
+          await authedFetch("/api/personas", {
+            method: "PUT",
+            body: JSON.stringify({
+              name: gLabel.slice(0, 60) || "My Persona",
+              profile: data.profile,
+              onboarding_complete: false,
+            }),
+          }).catch(() => {});
+          setLoading(false);
+          setTimeout(goNext, 600);
         })
         .catch((e) => {
           // eslint-disable-next-line no-console
           console.warn("[full] AI network error:", e?.message ?? e);
-          setAiStatus("fallback");
+          setAiStatus("error");
           setAiErrorMsg(e?.message || "Bağlantı hatası");
-        })
-        .finally(() => {
           setLoading(false);
-          setTimeout(goNext, 600);
         });
     }
-  }, [step?.id]);
+  }, [step?.id, fullRetryCount]);
 
   // Paywall → subscribe (Aylık ₺249,99 / Yıllık ₺1.899 — kullanıcı seçimine göre)
   const handleSubscribe = async () => {
@@ -1551,6 +1560,32 @@ export default function OnboardingScreen({ onComplete }: Props) {
 
         {/* Loader — staged messages + V2 logo + spinner */}
         {step?.type === "loader" && (
+          step.id === "generating-full" && aiStatus === "error" ? (
+            <View style={s.centerContent}>
+              <View style={{ marginBottom: 18 }}><MarkLogo c={c} size={64} /></View>
+              <Text style={s.heading}>Yapay zekamıza şu an ulaşılamıyor</Text>
+              <Text style={s.body}>
+                Stratejin gerçek AI ile üretilmeli — mock veri göstermeyiz. Modelde geçici bir yoğunluk var,
+                yeniden deneyelim.
+                {aiErrorMsg ? `\n\nAyrıntı: ${aiErrorMsg}` : ""}
+              </Text>
+              <View style={{ marginTop: 24, alignSelf: "stretch", gap: 10 }}>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={() => { setAiStatus(null); setAiErrorMsg(""); setFullRetryCount((n) => n + 1); }}
+                  style={{ paddingVertical: 14, borderRadius: 14, backgroundColor: c.accent, alignItems: "center" }}
+                >
+                  <Text style={{ fontSize: 15, fontWeight: "700", color: "#fff" }}>Tekrar dene</Text>
+                </TouchableOpacity>
+                {fullRetryCount >= 2 && (
+                  <Text style={{ fontSize: 12, color: c.text3, textAlign: "center", lineHeight: 17 }}>
+                    Sorun devam ediyor. Ekibimiz uyarıldı. Kısa süre sonra dene — abonelik ücretin{"\n"}
+                    sana iade edilebilir (destek: eren@omegadijital.com).
+                  </Text>
+                )}
+              </View>
+            </View>
+          ) : (
           <View style={s.centerContent}>
             <View style={{ marginBottom: 18 }}><MarkLogo c={c} size={64} /></View>
             <Text style={s.heading}>{step.title}</Text>
@@ -1568,6 +1603,7 @@ export default function OnboardingScreen({ onComplete }: Props) {
                     : ["İşliyorum", "Birazdan…"]
             } />
           </View>
+          )
         )}
 
         {/* Reveal — personaData null olsa bile yine render et (akış kilitlenmesin) */}
@@ -1654,12 +1690,59 @@ export default function OnboardingScreen({ onComplete }: Props) {
           />
         )}
 
-        {/* Done */}
+        {/* Done — 3-adım tutorial + sekme yönlendirme */}
         {step?.type === "done" && (
           <View style={s.centerContent}>
             <View style={{ marginBottom: 16 }}><MarkLogo c={c} size={64} /></View>
             <Text style={s.heading}>{step.title}</Text>
             <Text style={s.body}>{step.description}</Text>
+
+            <View style={{ marginTop: 24, width: "100%", gap: 12 }}>
+              <Text style={{ fontSize: 12, fontWeight: "700", color: c.accent, letterSpacing: 0.5, marginBottom: 4 }}>
+                3 ADIMDA FİKRİNİ YAYINA AL
+              </Text>
+              {[
+                { n: "1", t: "Kaydet", d: "Aklına gelen ya da yazıya dökmek istediğin fikrini mikrofona konuş." },
+                { n: "2", t: "Metne çevir", d: "Mindfolio sesini otomatik olarak transkripte dönüştürür." },
+                { n: "3", t: "Yayına al", d: "Senin dilinden ve stratejik bakış açından taslak + platform çıktıları üretir." },
+              ].map((k) => (
+                <View
+                  key={k.n}
+                  style={{
+                    flexDirection: "row",
+                    gap: 12,
+                    padding: 14,
+                    borderRadius: radii.card,
+                    backgroundColor: c.glassFill,
+                    borderWidth: 1,
+                    borderColor: c.glassBorder,
+                  }}
+                >
+                  <View
+                    style={{
+                      width: 28,
+                      height: 28,
+                      borderRadius: 14,
+                      backgroundColor: c.accent,
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Text style={{ color: "#fff", fontSize: 13, fontWeight: "700" }}>{k.n}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 14, fontWeight: "700", color: c.text1 }}>{k.t}</Text>
+                    <Text style={{ fontSize: 12, color: c.text3, lineHeight: 17, marginTop: 2 }}>{k.d}</Text>
+                  </View>
+                </View>
+              ))}
+
+              <Text style={{ fontSize: 11, color: c.text4, marginTop: 8, lineHeight: 16 }}>
+                💡 <Text style={{ fontWeight: "600", color: c.text3 }}>Fikirler</Text> — ilham topladığın alan. {" "}
+                <Text style={{ fontWeight: "600", color: c.text3 }}>İçerikler</Text> — taslaklarını arşivlediğin yer. {" "}
+                <Text style={{ fontWeight: "600", color: c.text3 }}>Profil</Text> — stratejini görüntüleyip düzenlediğin yer.
+              </Text>
+            </View>
           </View>
         )}
       </Animated.View>
@@ -1682,7 +1765,9 @@ export default function OnboardingScreen({ onComplete }: Props) {
 
 const makeS = (c: Palette) => StyleSheet.create({
   container: { flex: 1, backgroundColor: c.page },
-  content: { padding: 20, paddingTop: 60, paddingBottom: 40 },
+  // Ekranı alttan-üstten ortala: flexGrow + justifyContent center. İçerik uzarsa
+  // scroll etmeye devam eder (SafeArea ile paddingTop güvence).
+  content: { flexGrow: 1, justifyContent: "center", padding: 20, paddingTop: 60, paddingBottom: 40 },
   header: { flexDirection: "row", justifyContent: "space-between", marginBottom: 8 },
   partLabel: { fontSize: 11, fontWeight: "700", textTransform: "uppercase", letterSpacing: 1, color: c.accent },
   stepCount: { fontSize: 11, color: c.text4 },

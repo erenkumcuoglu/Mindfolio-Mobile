@@ -8,6 +8,7 @@ import {
   Animated,
   Modal,
   StyleSheet,
+  ActivityIndicator,
 } from "react-native";
 import { useTheme } from "../theme/ThemeContext";
 import { radii, spacing, type Palette } from "../theme/tokens";
@@ -23,6 +24,7 @@ import {
 } from "../lib/recorder";
 import { transcribeAudio, generate, type GenFormat } from "../lib/ai";
 import { saveContent, isProUser } from "../lib/data";
+import { requestMicPermission } from "../lib/recorder";
 import { confirmAsync, alertMsg } from "../lib/confirm";
 import { loadStudioSession, saveStudioSession, clearStudioSession } from "../lib/studio-session";
 import { isTR } from "../lib/i18n";
@@ -62,7 +64,9 @@ const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${Str
 export default function RecordingFlow({ onExit, initialUpload, resumeDirect }: Props) {
   const { c } = useTheme();
   const styles = makeStyles(c);
-  const [step, setStep] = useState<Step>(initialUpload ? "transcribing" : "countdown");
+  // Yüklenen dosya için otomatik transcript yapmayı kaldırdık — kullanıcı
+  // segment eklemek ya da direkt transcript almak arasında seçim yapabilsin.
+  const [step, setStep] = useState<Step>(initialUpload ? "segments" : "countdown");
   const [pendingResume, setPendingResume] = useState<{ transcript: string; draft: string; excerpts?: Record<string, string> } | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
   const [seconds, setSeconds] = useState(0);
@@ -95,21 +99,12 @@ export default function RecordingFlow({ onExit, initialUpload, resumeDirect }: P
     }, 2200);
   };
 
-  // On mount: transcribe an uploaded file, resume a saved session, or record.
+  // On mount: yükleme varsa segment olarak ekle (auto-transcribe YOK), yoksa kayıt akışına gir.
   useEffect(() => {
     if (initialUpload) {
       const seg = { id: ++segId.current, rec: initialUpload, duration: 0 };
       setSegments([seg]);
-      (async () => {
-        try {
-          const text = await transcribeAudio(initialUpload);
-          setTranscript(text);
-          setStep("transcript");
-        } catch (e: any) {
-          alertMsg("Transkript", e?.message ?? "Ses dosyası işlenemedi.");
-          onExit();
-        }
-      })();
+      // step zaten "segments" — kullanıcı ekleme/transkripte geçme seçimini yapsın.
       return;
     }
     (async () => {
@@ -139,23 +134,44 @@ export default function RecordingFlow({ onExit, initialUpload, resumeDirect }: P
   // 3-2-1 countdown, then begin recording.
   useEffect(() => {
     if (step !== "countdown" || !resumeChecked) return;
-    setCount(3);
-    let n = 3;
-    const id = setInterval(() => {
-      n -= 1;
-      if (n <= 0) {
-        clearInterval(id);
-        startRecording()
-          .then(() => { setSeconds(0); setStep("recording"); })
-          .catch((e: any) => {
-            alertMsg("Mikrofon", e?.message ?? "Kayıt başlatılamadı (izin gerekebilir).");
-            onExit();
-          });
-      } else {
-        setCount(n);
+
+    // Önce mikrofon izni iste — kullanıcı bilinçli olarak butona bastıktan sonra.
+    // Reddederse geri sayıma başlamıyoruz.
+    let cancelled = false;
+    (async () => {
+      const ok = await requestMicPermission();
+      if (cancelled) return;
+      if (!ok) {
+        alertMsg("Mikrofon izni gerekli", "Ayarlar → Mindfolio → Mikrofon'dan izin verebilirsin. Sonra tekrar dene.");
+        onExit();
+        return;
       }
-    }, 800);
-    return () => clearInterval(id);
+      // İzin alındı — geri sayımı başlat
+      setCount(3);
+      let n = 3;
+      const id = setInterval(() => {
+        n -= 1;
+        if (n <= 0) {
+          clearInterval(id);
+          startRecording()
+            .then(() => { setSeconds(0); setStep("recording"); })
+            .catch((e: any) => {
+              alertMsg("Mikrofon", e?.message ?? "Kayıt başlatılamadı.");
+              onExit();
+            });
+        } else {
+          setCount(n);
+        }
+      }, 800);
+      // Effect cleanup için timer'ı sakla
+      (window as any).__recCountdownTimer = id;
+    })();
+
+    return () => {
+      cancelled = true;
+      const id = (window as any).__recCountdownTimer;
+      if (id) { clearInterval(id); (window as any).__recCountdownTimer = null; }
+    };
   }, [step, resumeChecked]);
 
   // Persist in-progress text so it survives leaving the screen (24h TTL).
@@ -286,10 +302,14 @@ export default function RecordingFlow({ onExit, initialUpload, resumeDirect }: P
         ),
         format,
       );
+      // Fonksiyonel updater + manuel session yazımı — React state güncellemesinin
+      // ardından yeni referans üretildiğinden preview kartı hemen render edilir.
+      // Önceden preview kartı ilk üretimde belirmiyordu; setImmediate benzeri
+      // tick ile forced re-render de garanti veriyoruz.
       setExcerpts((p) => {
         const next = { ...p, [format]: text };
         saveStudioSession({ excerpts: next as Record<string, string> });
-        return next;
+        return { ...next };
       });
     } catch (e: any) {
       alertMsg("Üretim", e?.message ?? "Oluşturulamadı");
@@ -515,6 +535,14 @@ export default function RecordingFlow({ onExit, initialUpload, resumeDirect }: P
         <View style={styles.draftCard}><Markdown text={draft} /></View>
 
         <Text style={styles.secLb}>PLATFORM ÇIKTILARI (hook + özet)</Text>
+        {busyFormat && (
+          <View style={[styles.draftCard, { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 8 }]}>
+            <ActivityIndicator size="small" color={c.accent} />
+            <Text style={{ fontSize: 13, color: c.text2, flex: 1 }}>
+              {platLabel(busyFormat)} için önizleme oluşturuluyor…
+            </Text>
+          </View>
+        )}
         <View style={styles.platRow}>
           {(["linkedin", "x", "substack", "medium"] as const).map((f) => {
             const isShared = !!sharedPls[f];

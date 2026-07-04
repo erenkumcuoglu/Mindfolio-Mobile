@@ -105,9 +105,9 @@ export default function ContentScreen() {
         {rows !== null && rows.length === 0 && (
           <EmptyState
             icon={<DocIcon color={c.accent} />}
-            title="Henüz içerik yok"
-            motiv="Yeni içerik ekle ya da Stüdyo'dan kayıt yap."
-            ctaLabel="İçerik Ekle →"
+            title={t.contentEmptyTitle}
+            motiv={t.contentEmptyDesc}
+            ctaLabel="＋"
             onCta={() => setAdding(true)}
           />
         )}
@@ -231,7 +231,11 @@ function SwipeRow({
 
   const pan = useRef(
     PanResponder.create({
-      onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dx) > 12 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
+      // Capture phase → outer AppTabs swipe handler almadan önce inner alsın.
+      // Aksi halde kart üstünde sağ-sol swipe direkt tab geçişi tetikliyor,
+      // publish/archive hiç çalışmıyor.
+      onMoveShouldSetPanResponderCapture: (_e, g) => Math.abs(g.dx) > 10 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
+      onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dx) > 10 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
       onPanResponderMove: (_e, g) => tx.setValue(g.dx),
       onPanResponderRelease: (_e, g) => {
         if (g.dx > THRESHOLD) {
@@ -387,14 +391,17 @@ function ContentEditor({ mode, visible, item, pillars, onClose, onSaved }: {
         <View style={styles.modalOverlay}>
           <TouchableWithoutFeedback onPress={() => {}}>
             <View style={styles.sheet}>
-              <View style={styles.sheetHandleRow} {...closePan.panHandlers}>
-                <View style={styles.sheetHandle} />
-              </View>
-              <View style={styles.sheetHdr}>
-                <Text style={styles.sheetKicker}>{mode === "add" ? "Yeni İçerik" : "İçerik"}</Text>
-                <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                  <Text style={styles.sheetClose}>✕</Text>
-                </TouchableOpacity>
+              {/* Swipe-down area — handle + başlık üzerinde de pan-down ile kapat */}
+              <View {...closePan.panHandlers}>
+                <View style={styles.sheetHandleRow}>
+                  <View style={styles.sheetHandle} />
+                </View>
+                <View style={styles.sheetHdr}>
+                  <Text style={styles.sheetKicker}>{mode === "add" ? "Yeni İçerik" : "İçerik"}</Text>
+                  <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                    <Text style={styles.sheetClose}>✕</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
 
               <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" style={styles.sheetScroll}>
@@ -462,7 +469,10 @@ function ContentEditor({ mode, visible, item, pillars, onClose, onSaved }: {
                     )}
                   </View>
                 ) : (
-                  <TextInput style={[styles.input, styles.bodyInput]} placeholder="Taslak metni…" placeholderTextColor={c.text4} value={body} onChangeText={setBody} multiline textAlignVertical="top" />
+                  // scrollEnabled=false → TextInput içerik yüksekliği kadar uzar,
+                  // dış ScrollView pan/scroll'u yakalar. Kullanıcı metnin üzerine
+                  // dokunup drag ile de sheet'i kaydırabilir.
+                  <TextInput style={[styles.input, styles.bodyInput]} placeholder="Taslak metni…" placeholderTextColor={c.text4} value={body} onChangeText={setBody} multiline textAlignVertical="top" scrollEnabled={false} />
                 )}
 
                 {mode === "edit" && body.trim().length > 0 && (

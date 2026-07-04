@@ -44,6 +44,7 @@ export interface Answers {
   inspiration: string[];
   importedContent: string;
   "linkedin-url": string;
+  profession: string;
   "import-content": string;
   differentiator: string;
   goals: string[];

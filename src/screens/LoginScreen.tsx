@@ -163,6 +163,29 @@ export default function LoginScreen({ onLogin }: Props) {
   const [fullName, setFullName] = useState("");
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<"login" | "register">("login");
+  const [resetSent, setResetSent] = useState(false);
+
+  const handleForgotPassword = async () => {
+    if (!email.trim()) {
+      Alert.alert("E-posta gerekli", "Şifreni sıfırlamak için önce e-posta adresini yaz.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: (process.env.EXPO_PUBLIC_API_BASE ?? "https://mindfolioweb.netlify.app") + "/update-password",
+      });
+      if (error) throw error;
+      setResetSent(true);
+      Alert.alert(
+        "Sıfırlama bağlantısı gönderildi",
+        `${email.trim()} adresine bir bağlantı gönderdik. E-postandaki linki tıklayıp yeni şifreni oluşturabilirsin.`
+      );
+    } catch (e: any) {
+      Alert.alert("Hata", e?.message ?? "Sıfırlama bağlantısı gönderilemedi.");
+    }
+    setLoading(false);
+  };
 
   const handleSubmit = async () => {
     if (!email.trim() || !password.trim()) return;
@@ -222,7 +245,7 @@ export default function LoginScreen({ onLogin }: Props) {
   };
 
   const appleSoon = () =>
-    Alert.alert("Apple ile giriş", "Apple girişi için Apple Developer Program (yıllık $99) gerekiyor; hesap hazır olunca etkinleştireceğiz.");
+    Alert.alert("Apple ile giriş", "Henüz hazır değil, sonra tekrar deneyin.");
 
   if (step === "welcome") {
     return (
@@ -380,6 +403,15 @@ export default function LoginScreen({ onLogin }: Props) {
                   <Text style={styles.submitText}>{mode === "login" ? "Giriş yap" : "Hesap Oluştur"}</Text>
                 )}
               </TouchableOpacity>
+
+              {/* Şifremi unuttum — sadece login modunda */}
+              {mode === "login" && (
+                <TouchableOpacity onPress={handleForgotPassword} disabled={loading} style={{ marginTop: 14, alignSelf: "center" }}>
+                  <Text style={[styles.link, { fontSize: 13 }]}>
+                    {resetSent ? "Sıfırlama e-postası tekrar gönder" : "Şifreni mi unuttun?"}
+                  </Text>
+                </TouchableOpacity>
+              )}
 
               <Text style={styles.footer}>
                 {mode === "login" ? "Hesabın yok mu? " : "Zaten hesabın var mı? "}

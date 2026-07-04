@@ -10,6 +10,10 @@ import {
   Modal,
   TextInput,
   StyleSheet,
+  PanResponder,
+  TouchableWithoutFeedback,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { useTheme } from "../theme/ThemeContext";
@@ -30,6 +34,8 @@ import type { RecordingResult } from "../lib/recorder";
 import { loadStudioSession, type StudioSession } from "../lib/studio-session";
 import { Markdown } from "../components/Markdown";
 import { useT } from "../lib/i18n";
+import { registerForPushAsync } from "../lib/push";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 interface Props {
   onStartRecording?: () => void;
@@ -43,7 +49,8 @@ export default function StudioScreen({ onStartRecording: onStartRecordingRaw, on
   const styles = makeStyles(c);
   const [paywall, setPaywall] = useState(false);
   const [recent, setRecent] = useState<ContentRow[] | null>(null);
-  const [isPro, setIsPro] = useState(false);
+  // isPro null iken freeBadge render edilmesin — Pro kullanıcıda "3 hak kaldı" flash'ını önler.
+  const [isPro, setIsPro] = useState<boolean | null>(null);
   const [pillars, setPillars] = useState<string[]>([]);
   const [writeOpen, setWriteOpen] = useState(false);
   const [viewing, setViewing] = useState<ContentRow | null>(null);
@@ -90,6 +97,17 @@ export default function StudioScreen({ onStartRecording: onStartRecordingRaw, on
     getPersona()
       .then((p) => alive && setPillars((p?.profile?.pillars ?? []).map((x) => x.title).filter(Boolean)))
       .catch(() => {});
+    // Push izni — Studio ilk kez açıldığında (bir kez sor)
+    AsyncStorage.getItem("mindfolio.pushAsked").then((v) => {
+      if (v === "1") return;
+      // 4 saniye bekle (ilk açılış heyecanını bozma)
+      setTimeout(() => {
+        if (!alive) return;
+        registerForPushAsync().finally(() => {
+          AsyncStorage.setItem("mindfolio.pushAsked", "1").catch(() => {});
+        });
+      }, 4000);
+    }).catch(() => {});
     return () => { alive = false; };
   }, [loadRecent]);
 
@@ -130,23 +148,23 @@ export default function StudioScreen({ onStartRecording: onStartRecordingRaw, on
             <MicHeroIcon size={24} color="#fff" />
           </LinearGradient>
         </TouchableOpacity>
-        <Text style={styles.micLb}>Kayıt Başlat</Text>
-        <Text style={styles.micSub}>Konuş, biz yazıya çevirelim</Text>
+        <Text style={styles.micLb}>{t.studioStart}</Text>
+        <Text style={styles.micSub}>{t.studioTalkPrompt}</Text>
       </View>
 
       <View style={styles.qaRow}>
         <TouchableOpacity style={styles.qaBtn} activeOpacity={0.7} onPress={() => setWriteOpen(true)}>
           <TextLinesIcon color={c.accent} />
-          <Text style={styles.qaText}>Metin Yaz</Text>
+          <Text style={styles.qaText}>{t.studioTextWrite}</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.qaBtn} activeOpacity={0.7} onPress={handleUpload}>
           <UploadIcon color={c.accent} />
-          <Text style={styles.qaText}>Ses Dosyası Yükle</Text>
+          <Text style={styles.qaText}>{t.studioAudioUpload}</Text>
         </TouchableOpacity>
       </View>
 
       <View style={styles.secRow}>
-        <Text style={styles.secLb}>SON KAYITLAR</Text>
+        <Text style={styles.secLb}>{t.studioRecentTitle.toUpperCase()}</Text>
       </View>
 
       {pending && (
@@ -169,12 +187,10 @@ export default function StudioScreen({ onStartRecording: onStartRecordingRaw, on
       ) : recent.length === 0 ? (
         <View style={styles.emptyCard}>
           <View style={styles.emptyIcon}><MicSmallIcon color={c.accent} /></View>
-          <Text style={styles.emptyTitle}>İlk içeriğin bir tık uzakta.</Text>
-          <Text style={styles.emptyDesc}>
-            Mikrofona basıp doğal konuş — Mindfolio sesini içeriğe dönüştürür. Hazır olduğunda LinkedIn, X, Substack ve Medium çıktısı tek dokunuşta.
-          </Text>
+          <Text style={styles.emptyTitle}>{t.studioEmptyTitle}</Text>
+          <Text style={styles.emptyDesc}>{t.studioEmptyDesc}</Text>
           <TouchableOpacity style={styles.emptyCta} activeOpacity={0.85} onPress={onStartRecording}>
-            <Text style={styles.emptyCtaText}>Kayda Başla →</Text>
+            <Text style={styles.emptyCtaText}>{t.studioStart} →</Text>
           </TouchableOpacity>
         </View>
       ) : (
@@ -202,11 +218,13 @@ export default function StudioScreen({ onStartRecording: onStartRecordingRaw, on
         </View>
       )}
 
-      {!isPro && (
+      {isPro === false && (
         <TouchableOpacity style={styles.freeBadge} activeOpacity={0.8} onPress={() => setPaywall(true)}>
           <LockIcon color={c.amber} />
           <Text style={styles.freeBadgeText}>
-            Ücretsiz · 30sn limit · {remainingFree > 0 ? `${remainingFree} hak kaldı` : "Limit doldu"}
+            {remainingFree > 0
+              ? t.studioFreeBadgeFmt.replace("{n}", String(remainingFree))
+              : t.studioFreeBadgeFull}
           </Text>
         </TouchableOpacity>
       )}
@@ -227,29 +245,41 @@ export default function StudioScreen({ onStartRecording: onStartRecordingRaw, on
 function RecentViewer({ item, onClose }: { item: ContentRow | null; onClose: () => void }) {
   const { c } = useTheme();
   const styles = makeStyles(c);
+  const closePan = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_e, g) => g.dy > 8 && g.dy > Math.abs(g.dx) * 1.2,
+      onPanResponderRelease: (_e, g) => { if (g.dy > 60) onClose(); },
+    }),
+  ).current;
   if (!item) return null;
   const hasDraft = !!item.body;
   return (
     <Modal visible={!!item} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={styles.mdOverlay}>
-        <View style={styles.mdSheet}>
-          <View style={styles.mdHandle} />
-          <View style={styles.mdHdr}>
-            <Text style={styles.mdTitle} numberOfLines={2}>{item.title}</Text>
-            <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-              <Text style={styles.mdClose}>✕</Text>
-            </TouchableOpacity>
-          </View>
-          <View style={styles.rvMetaRow}>
-            {hasDraft && <View style={styles.rcBadge}><Text style={styles.rcBadgeText}>Taslak hazır</Text></View>}
-            {item.category ? <View style={styles.rcPillar}><Text style={styles.rcPillarText}>{item.category}</Text></View> : null}
-            <Text style={styles.rcMeta}>{formatShortDate(item.created_at)}</Text>
-          </View>
-          <ScrollView style={styles.rvBodyWrap} showsVerticalScrollIndicator={false}>
-            {item.body ? <Markdown text={item.body} /> : <Text style={styles.rvBody}>Bu kayıt için henüz taslak metni yok.</Text>}
-          </ScrollView>
+      <TouchableWithoutFeedback onPress={onClose}>
+        <View style={styles.mdOverlay}>
+          <TouchableWithoutFeedback onPress={() => { /* stop propagation */ }}>
+            <View style={styles.mdSheet}>
+              <View {...closePan.panHandlers}>
+                <View style={styles.mdHandle} />
+                <View style={styles.mdHdr}>
+                  <Text style={styles.mdTitle} numberOfLines={2}>{item.title}</Text>
+                  <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                    <Text style={styles.mdClose}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.rvMetaRow}>
+                  {hasDraft && <View style={styles.rcBadge}><Text style={styles.rcBadgeText}>Taslak hazır</Text></View>}
+                  {item.category ? <View style={styles.rcPillar}><Text style={styles.rcPillarText}>{item.category}</Text></View> : null}
+                  <Text style={styles.rcMeta}>{formatShortDate(item.created_at)}</Text>
+                </View>
+              </View>
+              <ScrollView style={styles.rvBodyWrap} showsVerticalScrollIndicator={false}>
+                {item.body ? <Markdown text={item.body} /> : <Text style={styles.rvBody}>Bu kayıt için henüz taslak metni yok.</Text>}
+              </ScrollView>
+            </View>
+          </TouchableWithoutFeedback>
         </View>
-      </View>
+      </TouchableWithoutFeedback>
     </Modal>
   );
 }
@@ -272,6 +302,14 @@ function WriteDraftModal({
   const [body, setBody] = useState("");
   const [pillar, setPillar] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // Sheet swipe-down dismiss
+  const writePan = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_e, g) => g.dy > 8 && g.dy > Math.abs(g.dx) * 1.2,
+      onPanResponderRelease: (_e, g) => { if (g.dy > 60) onClose(); },
+    }),
+  ).current;
 
   useEffect(() => {
     if (visible) { setTitle(""); setBody(""); setPillar(null); setSaving(false); }
@@ -297,65 +335,74 @@ function WriteDraftModal({
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={styles.mdOverlay}>
-        <View style={styles.mdSheet}>
-          <View style={styles.mdHandle} />
-          <View style={styles.mdHdr}>
-            <Text style={styles.mdTitle}>Metin Yaz</Text>
-            <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-              <Text style={styles.mdClose}>✕</Text>
-            </TouchableOpacity>
-          </View>
-          <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-            <Text style={styles.mdLb}>BAŞLIK</Text>
-            <TextInput
-              style={styles.mdInput}
-              placeholder="İçeriğin başlığı"
-              placeholderTextColor={c.text4}
-              value={title}
-              onChangeText={setTitle}
-            />
-            {pillars.length > 0 && (
-              <>
-                <Text style={styles.mdLb}>İÇERİK SÜTUNU</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.mdPillRow}>
-                  {pillars.map((p) => {
-                    const on = pillar === p;
-                    return (
-                      <TouchableOpacity
-                        key={p}
-                        style={[styles.mdPill, on && styles.mdPillOn]}
-                        activeOpacity={0.8}
-                        onPress={() => setPillar(on ? null : p)}
-                      >
-                        <Text style={[styles.mdPillText, on && styles.mdPillTextOn]} numberOfLines={1}>{p}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
+        <TouchableWithoutFeedback onPress={onClose}>
+          <View style={styles.mdOverlay}>
+            <TouchableWithoutFeedback onPress={() => { /* stop propagation */ }}>
+              <View style={styles.mdSheet}>
+                <View {...writePan.panHandlers}>
+                  <View style={styles.mdHandle} />
+                  <View style={styles.mdHdr}>
+                    <Text style={styles.mdTitle}>Metin Yaz</Text>
+                    <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                      <Text style={styles.mdClose}>✕</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+                  <Text style={styles.mdLb}>BAŞLIK</Text>
+                  <TextInput
+                    style={styles.mdInput}
+                    placeholder="İçeriğin başlığı"
+                    placeholderTextColor={c.text4}
+                    value={title}
+                    onChangeText={setTitle}
+                  />
+                  {pillars.length > 0 && (
+                    <>
+                      <Text style={styles.mdLb}>İÇERİK SÜTUNU</Text>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.mdPillRow}>
+                        {pillars.map((p) => {
+                          const on = pillar === p;
+                          return (
+                            <TouchableOpacity
+                              key={p}
+                              style={[styles.mdPill, on && styles.mdPillOn]}
+                              activeOpacity={0.8}
+                              onPress={() => setPillar(on ? null : p)}
+                            >
+                              <Text style={[styles.mdPillText, on && styles.mdPillTextOn]} numberOfLines={1}>{p}</Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </ScrollView>
+                    </>
+                  )}
+                  <Text style={styles.mdLb}>NOTLAR / TASLAK</Text>
+                  <TextInput
+                    style={[styles.mdInput, styles.mdArea]}
+                    placeholder="Aklındaki fikri buraya yaz…"
+                    placeholderTextColor={c.text4}
+                    value={body}
+                    onChangeText={setBody}
+                    multiline
+                    textAlignVertical="top"
+                    scrollEnabled={false}
+                  />
                 </ScrollView>
-              </>
-            )}
-            <Text style={styles.mdLb}>NOTLAR / TASLAK</Text>
-            <TextInput
-              style={[styles.mdInput, styles.mdArea]}
-              placeholder="Aklındaki fikri buraya yaz…"
-              placeholderTextColor={c.text4}
-              value={body}
-              onChangeText={setBody}
-              multiline
-              textAlignVertical="top"
-            />
-          </ScrollView>
-          <TouchableOpacity
-            style={[styles.mdSave, (saving || (!title.trim() && !body.trim())) && styles.mdSaveOff]}
-            activeOpacity={0.85}
-            onPress={save}
-            disabled={saving || (!title.trim() && !body.trim())}
-          >
-            {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.mdSaveText}>Kaydet</Text>}
-          </TouchableOpacity>
-        </View>
-      </View>
+                <TouchableOpacity
+                  style={[styles.mdSave, (saving || (!title.trim() && !body.trim())) && styles.mdSaveOff]}
+                  activeOpacity={0.85}
+                  onPress={save}
+                  disabled={saving || (!title.trim() && !body.trim())}
+                >
+                  {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.mdSaveText}>Kaydet</Text>}
+                </TouchableOpacity>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }

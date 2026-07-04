@@ -10,6 +10,12 @@ import {
   Image,
   Animated,
   StyleSheet,
+  KeyboardAvoidingView,
+  Platform,
+  Keyboard,
+  TouchableWithoutFeedback,
+  Linking,
+  PanResponder,
 } from "react-native";
 import { useTheme } from "../theme/ThemeContext";
 import { radii, spacing, type Palette } from "../theme/tokens";
@@ -114,7 +120,12 @@ export default function IdeasScreen() {
 
   return (
     <View style={styles.root}>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        // Titreme modunda kullanıcı scroll'a başlayınca modu kapat — iPhone davranışına yakın.
+        onScrollBeginDrag={() => { if (deleteMode) setDeleteMode(false); }}
+      >
         <View style={styles.pgHdr}>
           <Text style={styles.pgTitle}>{t.ideasTitle}</Text>
           <Text style={styles.pgDesc}>{t.ideasDesc}</Text>
@@ -127,9 +138,10 @@ export default function IdeasScreen() {
               style={styles.searchInput}
               value={query}
               onChangeText={(v) => { setQuery(v); setVisible(5); }}
-              placeholder="Fikirlerde ara…"
+              placeholder={t.ideasSearch}
               placeholderTextColor={c.text4}
               autoCorrect={false}
+              onFocus={() => { if (deleteMode) setDeleteMode(false); }}
             />
           </View>
         )}
@@ -192,9 +204,9 @@ export default function IdeasScreen() {
         {rows !== null && rows.length === 0 && (
           <EmptyState
             icon={<BulbIcon color={c.accent} />}
-            title="Henüz fikir yok"
-            motiv="Bir bağlantı veya not ekle — ilham kaynakların burada görünsün."
-            ctaLabel="Fikir Ekle →"
+            title={t.ideasEmptyTitle}
+            motiv={t.ideasEmptyDesc}
+            ctaLabel={t.ideasCta}
             onCta={() => setAdding(true)}
           />
         )}
@@ -206,7 +218,12 @@ export default function IdeasScreen() {
                 <TouchableOpacity
                   style={styles.card}
                   activeOpacity={0.85}
-                  onPress={() => (deleteMode ? setDeleteMode(false) : setEditingIdea(idea))}
+                  // Kart tap: her zaman detail modal aç — kullanıcı hem açıklamayı okuyabilsin
+                  // hem de içeriden linke gidebilsin. URL zorlu-doğrudan-tarayıcı akışı UX kırıyordu.
+                  onPress={() => {
+                    if (deleteMode) { setDeleteMode(false); return; }
+                    setEditingIdea(idea);
+                  }}
                   onLongPress={() => setDeleteMode(true)}
                 >
                   {idea.preview?.image ? <Image source={{ uri: idea.preview.image }} style={styles.thumb} resizeMode="cover" /> : null}
@@ -222,7 +239,16 @@ export default function IdeasScreen() {
                       ))}
                     </View>
                   ) : null}
-                  <Text style={styles.date}>{formatShortDate(idea.created_at)}</Text>
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+                    <Text style={styles.date}>{formatShortDate(idea.created_at)}</Text>
+                    {/* Düzenle butonu — URL varsa kart tap URL'e gidiyor, ✎ ile fikri düzenle */}
+                    <TouchableOpacity
+                      onPress={(e) => { (e as any).stopPropagation?.(); setEditingIdea(idea); }}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Text style={{ fontSize: 14, color: c.text3, fontWeight: "600" }}>✎</Text>
+                    </TouchableOpacity>
+                  </View>
                 </TouchableOpacity>
                 {deleteMode && (
                   <TouchableOpacity style={styles.delBadge} activeOpacity={0.8} onPress={() => onDeleteIdea(idea)}>
@@ -280,6 +306,14 @@ function AddIdeaModal({ visible, item, allTags, onClose, onSaved }: {
   const [fetching, setFetching] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  // Sheet swipe-down dismiss — üst handle bölgesinde parmakla aşağı sürüklendiğinde kapan.
+  const closePan = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_e, g) => g.dy > 8 && g.dy > Math.abs(g.dx) * 1.2,
+      onPanResponderRelease: (_e, g) => { if (g.dy > 60) onClose(); },
+    }),
+  ).current;
+
   useEffect(() => {
     if (visible) {
       setTitle(item?.title ?? "");
@@ -328,10 +362,25 @@ function AddIdeaModal({ visible, item, allTags, onClose, onSaved }: {
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.modalOverlay}>
-        <View style={styles.sheet}>
-          <View style={styles.sheetHandle} />
-          <Text style={styles.sheetTitle}>{item ? "Fikri Düzenle" : "Yeni Fikir"}</Text>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={{ flex: 1 }}
+      >
+        {/* Arka plana tıklayınca klavye kapansın + modal dismiss */}
+        <TouchableWithoutFeedback onPress={() => { Keyboard.dismiss(); onClose(); }}>
+          <View style={styles.modalOverlay}>
+            {/* Sheet içine tıklama yayılmasın (dismiss'e neden olmasın) */}
+            <TouchableWithoutFeedback onPress={() => { /* stop propagation */ }}>
+              <View style={styles.sheet}>
+                <ScrollView
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={{ paddingBottom: 20 }}
+                >
+                  <View {...closePan.panHandlers}>
+                    <View style={styles.sheetHandle} />
+                    <Text style={styles.sheetTitle}>{item ? "Fikri Düzenle" : "Yeni Fikir"}</Text>
+                  </View>
 
           <Text style={styles.fieldLb}>Bağlantı (otomatik çekilir)</Text>
           <TextInput
@@ -355,6 +404,15 @@ function AddIdeaModal({ visible, item, allTags, onClose, onSaved }: {
                 {preview.description ? <Text style={styles.previewDesc} numberOfLines={2}>{preview.description}</Text> : null}
               </View>
             </View>
+          )}
+          {!!url.trim() && /^https?:\/\//.test(url.trim()) && (
+            <TouchableOpacity
+              style={styles.openLinkBtn}
+              activeOpacity={0.8}
+              onPress={() => { Linking.openURL(url.trim()).catch(() => {}); }}
+            >
+              <Text style={styles.openLinkBtnText}>Bağlantıyı Aç →</Text>
+            </TouchableOpacity>
           )}
 
           <Text style={styles.fieldLb}>Başlık</Text>
@@ -390,14 +448,18 @@ function AddIdeaModal({ visible, item, allTags, onClose, onSaved }: {
             </>
           )}
 
-          <View style={styles.sheetActions}>
-            <TouchableOpacity style={styles.cancelBtn} onPress={onClose}><Text style={styles.cancelText}>Vazgeç</Text></TouchableOpacity>
-            <TouchableOpacity style={[styles.saveBtn, saving && { opacity: 0.5 }]} onPress={save} disabled={saving}>
-              <Text style={styles.saveText}>{saving ? "Kaydediliyor…" : "Kaydet"}</Text>
-            </TouchableOpacity>
+                  <View style={styles.sheetActions}>
+                    <TouchableOpacity style={styles.cancelBtn} onPress={onClose}><Text style={styles.cancelText}>Vazgeç</Text></TouchableOpacity>
+                    <TouchableOpacity style={[styles.saveBtn, saving && { opacity: 0.5 }]} onPress={save} disabled={saving}>
+                      <Text style={styles.saveText}>{saving ? "Kaydediliyor…" : "Kaydet"}</Text>
+                    </TouchableOpacity>
+                  </View>
+                </ScrollView>
+              </View>
+            </TouchableWithoutFeedback>
           </View>
-        </View>
-      </View>
+        </TouchableWithoutFeedback>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -483,6 +545,8 @@ function makeStyles(c: Palette) {
     notesInput: { minHeight: 64, textAlignVertical: "top" },
     fetchNote: { fontSize: 12, color: c.accent, marginTop: 8 },
     previewCard: { flexDirection: "row", gap: 10, marginTop: 12, padding: 10, borderRadius: 12, backgroundColor: c.glassFill, borderWidth: 1, borderColor: c.glassBorder },
+    openLinkBtn: { marginTop: 12, paddingVertical: 11, borderRadius: radii.btn, backgroundColor: c.accentGhost, borderWidth: 1, borderColor: c.mintBorder, alignItems: "center" },
+    openLinkBtnText: { fontSize: 13, fontWeight: "700", color: c.accent },
     previewImg: { width: 56, height: 56, borderRadius: 8, backgroundColor: c.surfaceElevated },
     previewTitle: { fontSize: 13, fontWeight: "600", color: c.text1 },
     previewDesc: { fontSize: 12, color: c.text3, marginTop: 2 },

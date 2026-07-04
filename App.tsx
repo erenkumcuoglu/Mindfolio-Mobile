@@ -10,6 +10,7 @@ import { ThemeProvider, useTheme } from './src/theme/ThemeContext';
 import { LanguageProvider } from './src/lib/i18n';
 import { DialogHost } from './src/components/DialogHost';
 import { getPersona } from './src/lib/data';
+import { refreshPushTokenIfGranted } from './src/lib/push';
 
 function Gate() {
   const { scheme } = useTheme();
@@ -37,14 +38,39 @@ function Gate() {
       if (data.session) checkOnboarding();
     });
     const { data: sub } = supabase.auth.onAuthStateChange((event, next) => {
+      // eslint-disable-next-line no-console
+      console.info("[auth]", event, "session:", next ? "var" : "yok");
+
+      // KRİTİK: SIGNED_OUT explicit değilse (sadece token yenileme fail'ı gibi)
+      // session'ı null'a çekmemek için filtreleme.
+      if (event === "TOKEN_REFRESHED") {
+        // Sadece session'ı güncelle, onboarding state'ini bozma.
+        if (next) setSession(next);
+        return;
+      }
+      if (event === "USER_UPDATED") {
+        if (next) setSession(next);
+        return;
+      }
+      if (event === "PASSWORD_RECOVERY") {
+        // İptal — session'ı sıfırlama, sadece log.
+        return;
+      }
+
       setSession(next);
-      // Sadece yeni oturum / çıkışta onboarding state'i yenile.
-      // TOKEN_REFRESHED gibi olaylar onboarding'i SIFIRLAMAMALI (aksi halde başa sarar).
+
       if (event === "SIGNED_IN" && next) {
         setOnboardingComplete(null);
         checkOnboarding();
+        // Push token'ı yenile (izin varsa)
+        refreshPushTokenIfGranted().catch(() => {});
       } else if (event === "SIGNED_OUT") {
+        // Sadece explicit logout — kullanıcı Çıkış butonuna basmış olmalı.
+        // eslint-disable-next-line no-console
+        console.warn("[auth] SIGNED_OUT — session temizlendi");
         setOnboardingComplete(null);
+      } else if (event === "INITIAL_SESSION") {
+        if (next) checkOnboarding();
       }
     });
     return () => sub.subscription.unsubscribe();
