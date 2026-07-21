@@ -5,6 +5,8 @@ import {
   TextInput,
   TouchableOpacity,
   ScrollView,
+  KeyboardAvoidingView,
+  Platform,
   Animated,
   Modal,
   StyleSheet,
@@ -481,7 +483,8 @@ export default function RecordingFlow({ onExit, initialUpload, resumeDirect }: P
           <Text style={styles.navTitle}>Transkript & Notlar</Text>
           <TouchableOpacity onPress={leaveSaved}><Text style={styles.navDone}>Stüdyo</Text></TouchableOpacity>
         </View>
-        <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
+        <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           <Text style={styles.secLb}>TRANSKRİPT</Text>
           <TextInput style={styles.transcriptCard} value={transcript} onChangeText={setTranscript} multiline />
 
@@ -518,6 +521,7 @@ export default function RecordingFlow({ onExit, initialUpload, resumeDirect }: P
           </TouchableOpacity>
           <Text style={styles.saveHint}>💾 Transkript ve taslakların saklanır; ses kaydın saklanmaz, gizlilik için silinir.</Text>
         </ScrollView>
+        </KeyboardAvoidingView>
       </View>
     );
   }
