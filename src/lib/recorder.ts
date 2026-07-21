@@ -17,6 +17,16 @@ export type RecordingResult =
 
 export const BAND_COUNT = 48;
 
+// Konuşma için optimize preset — mono + 64 kbps. HIGH_QUALITY (~128 kbps stereo)
+// yerine bunu kullanıyoruz: dosya boyutu ~yarıya iner (uzun kayıtlarda transcript
+// yükleme/timeout riskini azaltır), konuşma kalitesi pratikte etkilenmez.
+const SPEECH_PRESET = {
+  ...RecordingPresets.HIGH_QUALITY,
+  numberOfChannels: 1,
+  bitRate: 64000,
+  web: { ...((RecordingPresets.HIGH_QUALITY as any).web ?? {}), bitsPerSecond: 64000 },
+} as any;
+
 let spectrumCb: ((bands: number[]) => void) | null = null;
 export function subscribeSpectrum(cb: (bands: number[]) => void): () => void {
   spectrumCb = cb;
@@ -142,7 +152,8 @@ export async function startRecording(): Promise<void> {
   if (Platform.OS === "web") {
     webStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     webChunks = [];
-    webRecorder = new MediaRecorder(webStream);
+    // 64 kbps — SPEECH_PRESET ile paralel; boyutu düşük tutar.
+    webRecorder = new MediaRecorder(webStream, { audioBitsPerSecond: 64000 });
     webRecorder.ondataavailable = (e) => { if (e.data.size) webChunks.push(e.data); };
     webRecorder.start();
 
@@ -162,7 +173,7 @@ export async function startRecording(): Promise<void> {
   await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true } as any);
 
   // metering aktif → waveform gerçek ses seviyesine tepki verir
-  const preset = { ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true } as any;
+  const preset = { ...SPEECH_PRESET, isMeteringEnabled: true } as any;
   // AudioModule.AudioRecorder — class'a NativeAudioModule üzerinden erişiyoruz.
   const RecorderClass = (AudioModule as any).AudioRecorder;
   if (!RecorderClass) {
