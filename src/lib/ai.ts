@@ -1,4 +1,4 @@
-/** AI calls go through the web API / Supabase (server holds the model keys). */
+/** AI calls go through Supabase (server holds the model keys). */
 import { authedFetch, supabase } from "./supabase";
 import { toAudioJsonPayload, type RecordingResult } from "./recorder";
 import type { LinkPreview } from "./data";
@@ -60,6 +60,25 @@ function base64ToBytes(b64: string): Uint8Array {
   return out;
 }
 
+const POLL_INTERVAL_MS = 2500;
+const POLL_TIMEOUT_MS = 5 * 60 * 1000; // 5 min ceiling
+
+/** Poll a *_jobs row (transcript_jobs / generation_jobs) until done or error. */
+async function pollJob(table: string, id: string): Promise<string> {
+  const started = Date.now();
+  while (Date.now() - started < POLL_TIMEOUT_MS) {
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    const { data: row } = await supabase
+      .from(table)
+      .select("status, result, error")
+      .eq("id", id)
+      .single();
+    if (row?.status === "done") return (row.result as string) ?? "";
+    if (row?.status === "error") throw new Error((row.error as string) || "İşlem başarısız oldu");
+  }
+  throw new Error("İşlem zaman aşımına uğradı. Lütfen tekrar dene.");
+}
+
 /**
  * Upload the recording DIRECTLY to Supabase Storage and return its path.
  * Bypasses the web API request body so long recordings don't hit Netlify's 6MB
@@ -85,20 +104,15 @@ async function uploadRecordingToStorage(
   return { storagePath: path, mimeType, userId: uid };
 }
 
-const POLL_INTERVAL_MS = 2500;
-const POLL_TIMEOUT_MS = 5 * 60 * 1000; // 5 min ceiling for very long audio
-
 /**
  * Transcribe audio asynchronously.
  * Upload to Storage -> create a transcript_jobs row -> invoke the `transcribe`
- * Edge Function (which runs Gemini in the background, off Netlify) -> poll the
- * job row until it's done or errored. This removes the synchronous-function
- * timeout that killed long recordings.
+ * Edge Function (runs Gemini in the background, off Netlify) -> poll the row.
+ * Removes the synchronous-function timeout that killed long recordings.
  */
 export async function transcribeAudio(rec: RecordingResult): Promise<string> {
   const { storagePath, mimeType, userId } = await uploadRecordingToStorage(rec);
 
-  // 1) Create the job (RLS: user can only insert their own).
   const { data: job, error: jobErr } = await supabase
     .from("transcript_jobs")
     .insert({ user_id: userId, storage_path: storagePath, mime_type: mimeType, status: "pending" })
@@ -106,35 +120,38 @@ export async function transcribeAudio(rec: RecordingResult): Promise<string> {
     .single();
   if (jobErr || !job?.id) throw new Error(jobErr?.message || "Transkripsiyon işi oluşturulamadı.");
 
-  // 2) Trigger the Edge Function (responds 202, finishes in background).
   const { error: invokeErr } = await supabase.functions.invoke("transcribe", {
     body: { jobId: job.id },
   });
   if (invokeErr) throw new Error(invokeErr.message || "Transkripsiyon başlatılamadı.");
 
-  // 3) Poll the job row until done/error.
-  const started = Date.now();
-  while (Date.now() - started < POLL_TIMEOUT_MS) {
-    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-    const { data: row } = await supabase
-      .from("transcript_jobs")
-      .select("status, result, error")
-      .eq("id", job.id)
-      .single();
-    if (row?.status === "done") return (row.result as string) ?? "";
-    if (row?.status === "error") throw new Error((row.error as string) || "Transkripsiyon başarısız oldu");
-  }
-  throw new Error("Transkripsiyon zaman aşımına uğradı. Lütfen tekrar dene.");
+  return pollJob("transcript_jobs", job.id);
 }
 
 export type GenFormat = "blog" | "linkedin" | "x" | "substack" | "medium" | "raw";
 
+/**
+ * Generate content asynchronously.
+ * Insert a generation_jobs row -> invoke the `generate` Edge Function (two-pass
+ * runs off Netlify) -> poll the row. Fixes the 502/504 that long-transcript
+ * drafts hit on the synchronous Netlify route.
+ */
 export async function generate(prompt: string, format: GenFormat): Promise<string> {
-  const res = await authedFetch("/api/ai/generate", {
-    method: "POST",
-    body: JSON.stringify({ prompt, format }),
+  const { data: { user } } = await supabase.auth.getUser();
+  const uid = user?.id;
+  if (!uid) throw new Error("Oturum bulunamadı, tekrar giriş yap.");
+
+  const { data: job, error: jobErr } = await supabase
+    .from("generation_jobs")
+    .insert({ user_id: uid, prompt, format, status: "pending" })
+    .select("id")
+    .single();
+  if (jobErr || !job?.id) throw new Error(jobErr?.message || "İçerik işi oluşturulamadı.");
+
+  const { error: invokeErr } = await supabase.functions.invoke("generate", {
+    body: { jobId: job.id },
   });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "İçerik üretilemedi");
-  return (data.text as string) ?? "";
+  if (invokeErr) throw new Error(invokeErr.message || "İçerik üretimi başlatılamadı.");
+
+  return pollJob("generation_jobs", job.id);
 }
