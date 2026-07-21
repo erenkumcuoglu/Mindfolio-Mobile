@@ -11,6 +11,8 @@ import {
   Animated,
   PanResponder,
   Dimensions,
+  KeyboardAvoidingView,
+  Platform,
   StyleSheet,
 } from "react-native";
 import { useTheme } from "../theme/ThemeContext";
@@ -32,6 +34,7 @@ import {
 } from "../lib/data";
 import { confirmAsync, alertMsg } from "../lib/confirm";
 import { copyText } from "../lib/clipboard";
+import { toPlainText } from "../lib/markdown";
 import { generate, type GenFormat } from "../lib/ai";
 import { loadExcerpts, saveExcerpts, type Excerpts } from "../lib/excerpts";
 import { useT } from "../lib/i18n";
@@ -88,7 +91,7 @@ export default function ContentScreen() {
   };
   const copyBody = async (it: ContentRow) => {
     if (!it.body) return;
-    const ok = await copyText(it.body);
+    const ok = await copyText(toPlainText(it.body));
     alertMsg(ok ? "Kopyalandı" : "Kopyalanamadı", ok ? "İçerik panoya kopyalandı." : "Panoya erişilemedi.");
   };
   return (
@@ -361,6 +364,13 @@ function ContentEditor({ mode, visible, item, pillars, onClose, onSaved }: {
     persistExcerpts(next);
   };
 
+  const copyDraft = async () => {
+    const parts = [title.trim(), toPlainText(cleanBody).trim()].filter(Boolean);
+    if (!parts.length) return;
+    const ok = await copyText(parts.join("\n\n"));
+    alertMsg(ok ? "Kopyalandı" : "Kopyalanamadı", ok ? "Başlık ve içerik panoya kopyalandı." : "Panoya erişilemedi.");
+  };
+
   const save = async () => {
     if (!title.trim()) return;
     setSaving(true);
@@ -387,6 +397,7 @@ function ContentEditor({ mode, visible, item, pillars, onClose, onSaved }: {
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
       <TouchableWithoutFeedback onPress={onClose}>
         <View style={styles.modalOverlay}>
           <TouchableWithoutFeedback onPress={() => {}}>
@@ -454,11 +465,16 @@ function ContentEditor({ mode, visible, item, pillars, onClose, onSaved }: {
 
                 <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 14 }}>
                   <Text style={styles.fieldLb}>İçerik</Text>
-                  <TouchableOpacity onPress={() => setPreview((p) => !p)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
-                    <Text style={{ fontSize: 12, color: c.accent, fontWeight: "600" }}>
-                      {preview ? "Düzenle" : "Önizle"}
-                    </Text>
-                  </TouchableOpacity>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 16 }}>
+                    <TouchableOpacity onPress={copyDraft} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+                      <Text style={{ fontSize: 12, color: c.accent, fontWeight: "600" }}>⧉ Kopyala</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setPreview((p) => !p)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+                      <Text style={{ fontSize: 12, color: c.accent, fontWeight: "600" }}>
+                        {preview ? "Düzenle" : "Önizle"}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
                 {preview ? (
                   <View style={[styles.input, styles.bodyInput, { paddingVertical: 14 }]}>
@@ -523,6 +539,7 @@ function ContentEditor({ mode, visible, item, pillars, onClose, onSaved }: {
           </TouchableWithoutFeedback>
         </View>
       </TouchableWithoutFeedback>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
