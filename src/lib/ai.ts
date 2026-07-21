@@ -1,4 +1,4 @@
-/** AI calls go through the web API (server holds the model keys). */
+/** AI calls go through the web API / Supabase (server holds the model keys). */
 import { authedFetch, supabase } from "./supabase";
 import { toAudioJsonPayload, type RecordingResult } from "./recorder";
 import type { LinkPreview } from "./data";
@@ -62,13 +62,12 @@ function base64ToBytes(b64: string): Uint8Array {
 
 /**
  * Upload the recording DIRECTLY to Supabase Storage and return its path.
- * This bypasses the web API's request body entirely, so long recordings no
- * longer hit Netlify's 6MB synchronous-function body limit. Path convention:
- * `${userId}/<timestamp>.<ext>` — enforced by the bucket's per-user RLS policy.
+ * Bypasses the web API request body so long recordings don't hit Netlify's 6MB
+ * limit. Path convention: `${userId}/<timestamp>.<ext>` (per-user RLS).
  */
 async function uploadRecordingToStorage(
   rec: RecordingResult,
-): Promise<{ storagePath: string; mimeType: string }> {
+): Promise<{ storagePath: string; mimeType: string; userId: string }> {
   const { audioBase64, mimeType } = await toAudioJsonPayload(rec);
   const { data: { user } } = await supabase.auth.getUser();
   const uid = user?.id;
@@ -83,20 +82,49 @@ async function uploadRecordingToStorage(
     .upload(path, bytes.buffer, { contentType: mimeType, upsert: false });
 
   if (error) throw new Error(error.message || "Ses kaydı yüklenemedi.");
-  return { storagePath: path, mimeType };
+  return { storagePath: path, mimeType, userId: uid };
 }
 
+const POLL_INTERVAL_MS = 2500;
+const POLL_TIMEOUT_MS = 5 * 60 * 1000; // 5 min ceiling for very long audio
+
+/**
+ * Transcribe audio asynchronously.
+ * Upload to Storage -> create a transcript_jobs row -> invoke the `transcribe`
+ * Edge Function (which runs Gemini in the background, off Netlify) -> poll the
+ * job row until it's done or errored. This removes the synchronous-function
+ * timeout that killed long recordings.
+ */
 export async function transcribeAudio(rec: RecordingResult): Promise<string> {
-  // Upload to Storage first, then send only the tiny { storagePath, mimeType }
-  // reference to the API. Works identically on web and native.
-  const { storagePath, mimeType } = await uploadRecordingToStorage(rec);
-  const res = await authedFetch("/api/ai/transcribe", {
-    method: "POST",
-    body: JSON.stringify({ storagePath, mimeType }),
+  const { storagePath, mimeType, userId } = await uploadRecordingToStorage(rec);
+
+  // 1) Create the job (RLS: user can only insert their own).
+  const { data: job, error: jobErr } = await supabase
+    .from("transcript_jobs")
+    .insert({ user_id: userId, storage_path: storagePath, mime_type: mimeType, status: "pending" })
+    .select("id")
+    .single();
+  if (jobErr || !job?.id) throw new Error(jobErr?.message || "Transkripsiyon işi oluşturulamadı.");
+
+  // 2) Trigger the Edge Function (responds 202, finishes in background).
+  const { error: invokeErr } = await supabase.functions.invoke("transcribe", {
+    body: { jobId: job.id },
   });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Transkripsiyon başarısız oldu");
-  return (data.text as string) ?? "";
+  if (invokeErr) throw new Error(invokeErr.message || "Transkripsiyon başlatılamadı.");
+
+  // 3) Poll the job row until done/error.
+  const started = Date.now();
+  while (Date.now() - started < POLL_TIMEOUT_MS) {
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    const { data: row } = await supabase
+      .from("transcript_jobs")
+      .select("status, result, error")
+      .eq("id", job.id)
+      .single();
+    if (row?.status === "done") return (row.result as string) ?? "";
+    if (row?.status === "error") throw new Error((row.error as string) || "Transkripsiyon başarısız oldu");
+  }
+  throw new Error("Transkripsiyon zaman aşımına uğradı. Lütfen tekrar dene.");
 }
 
 export type GenFormat = "blog" | "linkedin" | "x" | "substack" | "medium" | "raw";
